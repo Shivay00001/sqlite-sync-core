@@ -1,8 +1,10 @@
 # Universal SQLite Synchronization Core
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Status: Production Ready](https://img.shields.io/badge/status-production--ready-brightgreen.svg)]()
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Status: Production Ready](https://img.shields.io/badge/status-production--ready-brightgreen.svg)](https://github.com/shivay00001/sqlite-sync-core)
+
+**A product of [VisionQuantech](https://github.com/shivay00001), India 🇮🇳**
 
 **A dependency-grade, local-first, offline-first SQLite synchronization primitive.**
 
