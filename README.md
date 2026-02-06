@@ -229,7 +229,11 @@ pytest tests/ -v
 
 > **Commercial use** (closed-source, SaaS, proprietary) requires a paid license.
 >
-> Contact: **<shivay00001@gmail.com>** for commercial licensing.
+> **Contact for licensing:**
+>
+> - <shivaysinghrajput@proton.me>
+> - <shivaysinghrajput@outlook.com>
+> - <vbs.visionquanteh@proton.me>
 
 See [LICENSE](./LICENSE) for full terms.
 
