@@ -218,7 +218,20 @@ pytest tests/ -v
 
 ## License
 
-MIT License - Use freely in commercial and open-source projects.
+**Dual License Model:**
+
+| Use Case | License | Cost |
+|----------|---------|------|
+| Personal projects | AGPL-3.0 | **Free** |
+| Open-source projects | AGPL-3.0 | **Free** |
+| Educational/Research | AGPL-3.0 | **Free** |
+| Commercial / Proprietary | Commercial License | **Paid** |
+
+> **Commercial use** (closed-source, SaaS, proprietary) requires a paid license.
+>
+> Contact: **<shivay00001@gmail.com>** for commercial licensing.
+
+See [LICENSE](./LICENSE) for full terms.
 
 ---
 

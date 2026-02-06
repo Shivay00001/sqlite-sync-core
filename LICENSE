@@ -1,0 +1,41 @@
+# SQLite Sync Core License
+
+Copyright (c) 2024 shivay00001
+
+## Dual License
+
+This software is available under two license options:
+
+### 1. Open Source License (AGPL-3.0)
+
+For **non-commercial** and **open-source projects**, this software is licensed under the [GNU Affero General Public License v3.0](https://www.gnu.org/licenses/agpl-3.0.html).
+
+You may use, modify, and distribute this software freely, provided that:
+- Your project is also open source under a compatible license
+- You include this license notice
+- Any modifications are also open sourced under AGPL-3.0
+- Network use counts as distribution (SaaS must open source)
+
+### 2. Commercial License
+
+For **commercial use**, **proprietary software**, or **closed-source projects**, you must purchase a commercial license.
+
+**Commercial use includes:**
+- Using this library in proprietary/closed-source software
+- Using this library in SaaS products without open-sourcing
+- Any use where you cannot comply with AGPL-3.0 terms
+
+**Pricing:**
+- Contact: shivay00001@gmail.com
+- Subject: "SQLite Sync Core Commercial License"
+
+---
+
+**AGPL-3.0 Summary:**
+- ✅ Free for personal projects
+- ✅ Free for open-source projects (with AGPL-3.0 compatible license)
+- ✅ Free for educational/research use
+- ❌ NOT free for closed-source commercial products
+- ❌ NOT free for proprietary SaaS without open-sourcing
+
+For the full AGPL-3.0 license text, see: https://www.gnu.org/licenses/agpl-3.0.html
