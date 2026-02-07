@@ -1,104 +1,59 @@
-# Universal SQLite Synchronization Core
+# sqlite-sync-core
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![PyPI](https://img.shields.io/pypi/v/sqlite-sync-core.svg)](https://pypi.org/project/sqlite-sync-core/)
 [![Status: Production Ready](https://img.shields.io/badge/status-production--ready-brightgreen.svg)](https://github.com/shivay00001/sqlite-sync-core)
 
-**A product of [VisionQuantech](https://github.com/shivay00001), India 🇮🇳**
+**A deterministic, infrastructure-free, local-first SQLite synchronization engine designed for offline-critical and privacy-sensitive systems.**
 
-**A dependency-grade, local-first, offline-first SQLite synchronization primitive.**
-
-Captures database changes as structured operations, packages them into self-contained bundles, and applies them deterministically across disconnected devices.
+Built by [VisionQuantech](https://github.com/shivay00001), India 🇮🇳
 
 ---
 
-## Features
+## Why sqlite-sync-core?
 
-- 🔒 **Append-only log** – Operations are immutable history
-- 🕐 **Vector clocks** – Causality tracking across devices  
-- ⚔️ **Conflict detection** – Never auto-merges, preserves conflicts
-- 🔄 **Deterministic replay** – Same operations = same result everywhere
-- 📦 **Transport agnostic** – Bundles work over USB, email, Bluetooth, anything
-- 🚫 **Zero infrastructure** – No servers, no cloud, no network required
+| Feature | sqlite-sync-core | Firebase | Supabase |
+|---------|------------------|----------|----------|
+| **No server required** | ✅ | ❌ | ❌ |
+| **Works offline** | ✅ | ⚠️ Limited | ⚠️ Limited |
+| **Transport agnostic** | ✅ USB, Email, HTTP, WS | Proprietary | WebSocket only |
+| **Explicit conflicts** | ✅ Never auto-overwrites | ❌ LWW | ❌ LWW |
+| **Deterministic replay** | ✅ Git-like correctness | ❌ | ❌ |
+| **No telemetry** | ✅ | ❌ | ❌ |
+| **Self-hosted** | ✅ | ❌ | ✅ |
 
 ---
 
 ## Installation
 
-### From PyPI
-
 ```bash
+# Basic installation
 pip install sqlite-sync-core
+
+# With HTTP server support
+pip install sqlite-sync-core[server]
+
+# With encryption support
+pip install sqlite-sync-core[crypto]
+
+# Everything
+pip install sqlite-sync-core[all]
 ```
-
-### From GitHub (Development)
-
-```bash
-git clone https://github.com/shivay00001/sqlite-sync-core.git
-cd sqlite-sync-core
-pip install -e .
-```
-
----
-
-## Real-Time Network Sync
-
-SQLite Sync Core now supports real-time synchronization over WebSockets.
-
-### Start the Reference Server
-
-```bash
-python -m sqlite_sync.network.server
-```
-
-### Connect a Client
-
-```python
-from sqlite_sync import SyncEngine
-from sqlite_sync.network.client import SyncClient
-
-engine = SyncEngine("my_app.db")
-engine.initialize()
-
-client = SyncClient(engine, "ws://localhost:8765")
-await client.connect()
-
-# Listen for remote changes
-asyncio.create_task(client.listen())
-
-# Send local changes
-ops = engine.get_new_operations()
-for op in ops:
-    await client.send_operation(op)
-```
-
----
-
-## Integration Examples
-
-See the `examples/` directory for full integration samples:
-
-- `basic_usage.py`: Simple CLI setup.
-- `network_sync.py`: Real-time sync between two peers.
-- `desktop_example.py`: Coming soon (GUI integration).
-
-### Requirements
-
-- Python 3.11+
-- `msgpack` (auto-installed)
 
 ---
 
 ## Quick Start
 
+### Initialize a Sync-Enabled Database
+
 ```python
 from sqlite_sync import SyncEngine
 
-# Initialize sync-enabled database
-engine = SyncEngine("my_database.db")
-engine.initialize()
+engine = SyncEngine("my_app.db")
+device_id = engine.initialize()
 
-# Create a user table
+# Create your table
 engine.connection.execute("""
     CREATE TABLE todos (
         id INTEGER PRIMARY KEY,
@@ -107,66 +62,207 @@ engine.connection.execute("""
     )
 """)
 
-# Enable sync for the table
+# Enable sync for this table
 engine.enable_sync_for_table("todos")
 
-# Now any INSERT/UPDATE/DELETE is automatically captured!
+# All changes are now automatically captured!
 engine.connection.execute("INSERT INTO todos (title) VALUES ('Buy milk')")
+engine.connection.commit()
 ```
 
----
-
-## Syncing Between Devices
-
-### Device A: Generate a bundle
+### Sync via File Transfer (USB, Email, Cloud Drive)
 
 ```python
-from sqlite_sync import SyncEngine
-
-engine_a = SyncEngine("device_a.db")
-engine_a.initialize()
-
-# Generate bundle for Device B
+# Device A: Generate bundle
 bundle_path = engine_a.generate_bundle(
-    peer_device_id=device_b_id,  # 16-byte UUID
+    peer_device_id=device_b_id,
     output_path="sync_bundle.db"
 )
-# Send bundle_path to Device B (USB, email, cloud, etc.)
+# Send bundle_path via any method: USB, email, Dropbox, etc.
+
+# Device B: Import bundle
+result = engine_b.import_bundle("sync_bundle.db")
+print(f"Applied: {result.applied_count}, Conflicts: {result.conflict_count}")
 ```
 
-### Device B: Import the bundle
+### Sync via HTTP (Real-time)
 
 ```python
-engine_b = SyncEngine("device_b.db")
-engine_b.initialize()
+from sqlite_sync.transport import HTTPTransport
+from sqlite_sync.sync_loop import SyncLoop, SyncLoopConfig
 
-# Import received bundle
-result = engine_b.import_bundle("sync_bundle.db")
+# Create transport
+transport = HTTPTransport(
+    base_url="http://localhost:8080",
+    device_id=engine.device_id
+)
 
-print(f"Applied: {result.applied_count}")
-print(f"Conflicts: {result.conflict_count}")
-print(f"Duplicates: {result.duplicate_count}")
+# Create background sync loop
+sync_loop = SyncLoop(
+    engine=engine,
+    transport=transport,
+    config=SyncLoopConfig(interval_seconds=30)
+)
+
+await sync_loop.start()  # Syncs automatically in background
+```
+
+### Sync via WebSocket (Real-time Bidirectional)
+
+```python
+from sqlite_sync.transport import WebSocketTransport
+
+transport = WebSocketTransport(
+    url="ws://localhost:8765",
+    device_id=engine.device_id,
+    on_operation_received=lambda op: print(f"Received: {op.op_type}")
+)
+
+await transport.connect()
+await transport.send_operations(engine.get_new_operations())
 ```
 
 ---
 
-## Handling Conflicts
+## Conflict Resolution
 
-Conflicts occur when two devices modify the same row independently.
+sqlite-sync-core detects conflicts but gives YOU control over resolution.
+
+### Built-in Strategies
 
 ```python
-# Get all unresolved conflicts
-conflicts = engine.get_unresolved_conflicts()
+from sqlite_sync.resolution import ResolutionStrategy, get_resolver
 
+# Last-Write-Wins (simple but may lose data)
+resolver = get_resolver(ResolutionStrategy.LAST_WRITE_WINS)
+
+# Field-level merge (preserves non-conflicting fields)
+resolver = get_resolver(ResolutionStrategy.FIELD_MERGE, prefer_local=True)
+
+# Manual (keep for user review)
+resolver = get_resolver(ResolutionStrategy.MANUAL)
+
+# Custom (your business logic)
+def my_resolver(context):
+    # Your logic here
+    return ResolutionResult(resolved=True, winning_op=context.local_op, ...)
+
+resolver = get_resolver(ResolutionStrategy.CUSTOM, resolver_fn=my_resolver)
+```
+
+### Handle Conflicts
+
+```python
+conflicts = engine.get_unresolved_conflicts()
 for conflict in conflicts:
-    print(f"Table: {conflict.table_name}")
-    print(f"Row PK: {conflict.row_pk}")
+    print(f"Conflict on {conflict.table_name}, row {conflict.row_pk.hex()}")
     print(f"Local op: {conflict.local_op_id.hex()}")
     print(f"Remote op: {conflict.remote_op_id.hex()}")
 ```
 
-> **Note:** This library intentionally does NOT auto-resolve conflicts.
-> You must implement your own resolution strategy.
+---
+
+## Advanced Features
+
+### Log Compaction
+
+```python
+from sqlite_sync.log_compaction import LogCompactor
+
+compactor = LogCompactor(engine.connection)
+
+# Create snapshot for new devices
+snapshot = compactor.create_snapshot()
+
+# Prune old operations
+compactor.prune_acknowledged_ops(safe_op_id)
+
+# Full compaction
+result = compactor.compact_log()
+print(f"Removed {result.ops_removed} operations")
+```
+
+### Schema Evolution
+
+```python
+from sqlite_sync.schema_evolution import SchemaManager
+
+schema = SchemaManager(engine.connection)
+
+# Safe column addition (syncs across devices)
+migration = schema.add_column(
+    table_name="todos",
+    column_name="priority",
+    column_type="INTEGER",
+    default_value=1
+)
+
+# Check compatibility
+if schema.check_compatibility(remote_version=1):
+    print("Compatible!")
+```
+
+### Security
+
+```python
+from sqlite_sync.security import SecurityManager
+
+security = SecurityManager(
+    device_id=engine.device_id,
+    signing_key=my_secret_key
+)
+
+# Sign bundles
+signed = security.sign_bundle(bundle_data)
+
+# Encrypt bundles (requires cryptography package)
+encrypted = security.encrypt_bundle(bundle_data, password="secret")
+decrypted = security.decrypt_bundle(encrypted, password="secret")
+```
+
+### Crash Safety
+
+```python
+from sqlite_sync.crash_safety import CrashSafeExecutor
+
+executor = CrashSafeExecutor(engine.connection)
+
+# Resume after crash
+checkpoint = executor.get_incomplete_checkpoint()
+if checkpoint:
+    print(f"Resuming from {checkpoint.last_applied_op_id.hex()}")
+
+# Atomic operations
+with executor.atomic_operation():
+    engine.apply_operation(op1)
+    engine.apply_operation(op2)  # Both or neither
+```
+
+---
+
+## Run the Sync Server
+
+```bash
+# Start HTTP sync server
+python -m sqlite_sync.server.http_server
+
+# Or in code
+from sqlite_sync.server import run_server
+run_server(host="0.0.0.0", port=8080)
+```
+
+---
+
+## Examples
+
+See the `examples/` directory:
+
+| Example | Description |
+|---------|-------------|
+| `basic_usage.py` | Simple CLI sync demo |
+| `desktop_demo.py` | Local sync between databases |
+| `http_sync_demo.py` | Client/server network sync |
+| `network_sync.py` | WebSocket real-time sync |
 
 ---
 
@@ -174,113 +270,62 @@ for conflict in conflicts:
 
 | # | Invariant | Description |
 |---|-----------|-------------|
-| 1 | **Append-only** | `sync_operations` only grows, never modified |
-| 2 | **Causal consistency** | Vector clocks ensure happens-before |
-| 3 | **Deterministic ordering** | Same operations always sort identically |
-| 4 | **Explicit conflicts** | Concurrent writes preserved as records |
-| 5 | **Idempotent import** | Same bundle × N imports = same result |
-| 6 | **Transport independence** | Bundles are self-contained SQLite files |
+| 1 | **Append-only** | Operations never modified |
+| 2 | **Causal consistency** | Vector clocks ensure ordering |
+| 3 | **Deterministic** | Same ops = same result everywhere |
+| 4 | **Explicit conflicts** | Never silently overwrites |
+| 5 | **Idempotent** | Import same bundle N times = same result |
+| 6 | **Transport agnostic** | Bundles work anywhere |
 
 ---
 
-## API Reference
-
-### `SyncEngine`
-
-| Method | Description |
-|--------|-------------|
-| `initialize()` | Initialize sync tables, returns device ID |
-| `enable_sync_for_table(name)` | Install triggers for a table |
-| `generate_bundle(peer_id, path)` | Create bundle for peer |
-| `import_bundle(path)` | Import bundle, returns `ImportResult` |
-| `get_unresolved_conflicts()` | Get all pending conflicts |
-| `get_vector_clock()` | Get current vector clock |
-| `close()` | Close database connection |
-
-### `ImportResult`
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `bundle_id` | bytes | UUID of imported bundle |
-| `source_device_id` | bytes | Device that created bundle |
-| `total_operations` | int | Total ops in bundle |
-| `applied_count` | int | Successfully applied |
-| `conflict_count` | int | Conflicts detected |
-| `duplicate_count` | int | Already had these ops |
-| `skipped` | bool | True if bundle already imported |
-
----
-
-## Project Structure
+## Architecture
 
 ```
-sqlite_sync_core/
-├── src/sqlite_sync/
-│   ├── engine.py          # Main SyncEngine class
-│   ├── config.py          # Configuration constants
-│   ├── errors.py          # Exception classes
-│   ├── invariants.py      # Core invariant enforcement
-│   ├── db/                # Database layer
-│   │   ├── schema.py      # Table definitions
-│   │   ├── migrations.py  # Initialization
-│   │   ├── triggers.py    # Change capture triggers
-│   │   └── connection.py  # Connection management
-│   ├── bundle/            # Bundle operations
-│   │   ├── generate.py    # Bundle creation
-│   │   ├── validate.py    # Bundle validation
-│   │   └── format.py      # Bundle metadata
-│   ├── import_apply/      # Import pipeline
-│   │   ├── apply.py       # Apply operations
-│   │   ├── conflict.py    # Conflict detection
-│   │   ├── ordering.py    # Deterministic sort
-│   │   └── dedup.py       # Deduplication
-│   ├── log/               # Operation log
-│   │   ├── operations.py  # SyncOperation dataclass
-│   │   └── vector_clock.py# Vector clock logic
-│   └── utils/             # Utilities
-│       ├── uuid7.py       # UUID v7 generation
-│       ├── hashing.py     # SHA-256 utilities
-│       └── msgpack_codec.py# Serialization
-├── tests/                 # Test suite
-├── pyproject.toml         # Package config
-└── README.md
+┌─────────────────────────────────────────────────────────┐
+│                    Your Application                      │
+├─────────────────────────────────────────────────────────┤
+│                     SyncEngine                           │
+│  ┌─────────┐ ┌─────────────┐ ┌──────────────────────┐   │
+│  │ Capture │ │ Resolution  │ │   Schema Evolution   │   │
+│  └─────────┘ └─────────────┘ └──────────────────────┘   │
+│  ┌─────────┐ ┌─────────────┐ ┌──────────────────────┐   │
+│  │ Bundle  │ │ Compaction  │ │      Security        │   │
+│  └─────────┘ └─────────────┘ └──────────────────────┘   │
+├─────────────────────────────────────────────────────────┤
+│              Transport Layer (Pluggable)                 │
+│  ┌──────┐  ┌───────────┐  ┌───────┐  ┌───────────────┐  │
+│  │ HTTP │  │ WebSocket │  │ File  │  │ Custom/P2P    │  │
+│  └──────┘  └───────────┘  └───────┘  └───────────────┘  │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Running Tests
+## Use Cases
 
-```bash
-# Using the custom test runner (no pytest required)
-python run_verification.py
-
-# Or with pytest
-pip install pytest
-pytest tests/ -v
-```
+- **Offline-first mobile apps** - Works without internet
+- **Air-gapped systems** - Defense, government, NGOs
+- **Privacy-sensitive applications** - Medical, legal, finance
+- **Field operations** - Works with USB/SD card transfer
+- **Embedded systems** - IoT with intermittent connectivity
+- **Multi-device personal apps** - Notes, todos, journals
 
 ---
 
 ## License
 
-**Dual License Model:**
+**Dual License:**
 
 | Use Case | License | Cost |
 |----------|---------|------|
-| Personal projects | AGPL-3.0 | **Free** |
-| Open-source projects | AGPL-3.0 | **Free** |
-| Educational/Research | AGPL-3.0 | **Free** |
-| Commercial / Proprietary | Commercial License | **Paid** |
+| Personal/Open Source | AGPL-3.0 | **Free** |
+| Commercial/Proprietary | Commercial | **Paid** |
 
-> **Commercial use** (closed-source, SaaS, proprietary) requires a paid license.
->
-> **Contact for licensing:**
->
-> - <shivaysinghrajput@proton.me>
-> - <shivaysinghrajput@outlook.com>
-> - <vbs.visionquanteh@proton.me>
+Contact for commercial licensing:
 
-See [LICENSE](./LICENSE) for full terms.
+- <shivaysinghrajput@proton.me>
+- <shivaysinghrajput@outlook.com>
 
 ---
 
@@ -288,9 +333,8 @@ See [LICENSE](./LICENSE) for full terms.
 
 1. Fork the repository
 2. Create a feature branch
-3. Make your changes
-4. Run the test suite
-5. Submit a pull request
+3. Run tests: `pytest tests/ -v`
+4. Submit a pull request
 
 ---
 

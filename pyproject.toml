@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sqlite-sync-core"
-version = "0.1.0"
+version = "0.2.0"
 description = "Universal SQLite Synchronization Core - A dependency-grade, local-first, offline-first SQLite synchronization primitive"
 readme = "README.md"
 license = {text = "MIT"}
@@ -36,6 +36,18 @@ Issues = "https://github.com/shivay00001/sqlite-sync-core/issues"
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.21.0",
+    "mypy>=1.0.0",
+]
+server = [
+    "flask>=3.0.0",
+]
+crypto = [
+    "cryptography>=41.0.0",
+]
+all = [
+    "flask>=3.0.0",
+    "cryptography>=41.0.0",
 ]
 
 [tool.setuptools.packages.find]
