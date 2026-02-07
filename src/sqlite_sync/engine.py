@@ -332,7 +332,7 @@ class SyncEngine:
                         applied_count += 1
                     else:
                         # Apply to user table
-                        apply_operation(conn, op)
+                        _apply_operation(conn, op)
                         
                         applied_op = SyncOperation(
                             op_id=op.op_id,
