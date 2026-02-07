@@ -1,226 +1,108 @@
 """
 Desktop App Demo - SQLite Sync Core
 
-A simple desktop application demonstrating sync between two local databases.
-Run this script to see sync in action without network.
+A simple demo showing sync between two local databases.
+Run this script to see sync in action without a network.
 """
 
-import os
 import sys
-import time
+import os
 import tempfile
 
-# Add src to path for development
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-
+# Use installed package (after pip install -e .)
 from sqlite_sync.engine import SyncEngine
-from sqlite_sync.resolution import ResolutionStrategy, get_resolver, ConflictContext
-from sqlite_sync.log_compaction import LogCompactor
-
-
-def create_demo_database(name: str, db_path: str) -> SyncEngine:
-    """Create and initialize a demo database."""
-    if os.path.exists(db_path):
-        os.remove(db_path)
-    
-    engine = SyncEngine(db_path)
-    engine.initialize()
-    
-    # Create demo table
-    engine.connection.execute("""
-        CREATE TABLE IF NOT EXISTS notes (
-            id INTEGER PRIMARY KEY,
-            title TEXT NOT NULL,
-            content TEXT,
-            priority INTEGER DEFAULT 1,
-            created_at INTEGER DEFAULT (strftime('%s', 'now'))
-        )
-    """)
-    engine.connection.commit()
-    
-    # Enable sync
-    engine.enable_sync_for_table("notes")
-    
-    print(f"[{name}] Initialized: {engine.device_id.hex()[:8]}...")
-    return engine
 
 
 def demo_basic_sync():
     """Demonstrate basic sync between two databases."""
-    print("\n" + "="*60)
-    print("DEMO: Basic Sync Between Two Databases")
-    print("="*60 + "\n")
+    print("=" * 50)
+    print("DEMO: Sync Between Two Databases")
+    print("=" * 50)
     
-    # Create two "devices"
-    device_a = create_demo_database("Device A", "demo_device_a.db")
-    device_b = create_demo_database("Device B", "demo_device_b.db")
+    # Use temp directory for all files
+    tmpdir = tempfile.mkdtemp()
+    db_a = os.path.join(tmpdir, 'device_a.db')
+    db_b = os.path.join(tmpdir, 'device_b.db')
+    bundle_ab = os.path.join(tmpdir, 'bundle_ab.db')
+    bundle_ba = os.path.join(tmpdir, 'bundle_ba.db')
     
-    # Device A creates a note
-    print("\n[Device A] Creating note...")
-    device_a.connection.execute(
-        "INSERT INTO notes (title, content, priority) VALUES (?, ?, ?)",
-        ("Meeting Notes", "Discuss sync protocol", 3)
-    )
-    device_a.connection.commit()
-    
-    # Generate bundle from A
-    print("[Device A] Generating bundle...")
-    bundle_path = device_a.generate_bundle(device_b.device_id, "sync_a_to_b.bundle")
-    
-    if bundle_path:
-        # Device B imports bundle
-        print("[Device B] Importing bundle...")
-        result = device_b.import_bundle(bundle_path)
-        print(f"[Device B] Applied {result.applied_count} operations, {result.conflict_count} conflicts")
+    try:
+        # Create Device A
+        print("\n[1] Creating Device A...")
+        engine_a = SyncEngine(db_a)
+        device_a_id = engine_a.initialize()
+        print(f"    Device A ID: {device_a_id.hex()[:8]}")
         
-        # Verify data
-        cursor = device_b.connection.execute("SELECT title, content FROM notes")
-        rows = cursor.fetchall()
-        print(f"[Device B] Notes: {rows}")
-    
-    # Device B creates a note
-    print("\n[Device B] Creating another note...")
-    device_b.connection.execute(
-        "INSERT INTO notes (title, content, priority) VALUES (?, ?, ?)",
-        ("Todo List", "Implement encryption", 2)
-    )
-    device_b.connection.commit()
-    
-    # Sync back to A
-    print("[Device B] Generating bundle for A...")
-    bundle_path = device_b.generate_bundle(device_a.device_id, "sync_b_to_a.bundle")
-    
-    if bundle_path:
-        print("[Device A] Importing bundle...")
-        result = device_a.import_bundle(bundle_path)
-        print(f"[Device A] Applied {result.applied_count} operations")
+        engine_a.connection.execute('CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)')
+        engine_a.connection.commit()
+        engine_a.enable_sync_for_table('notes')
+        print("    Table 'notes' created and sync enabled")
         
-        # Both should have same data
-        cursor = device_a.connection.execute("SELECT title FROM notes ORDER BY id")
-        rows = cursor.fetchall()
-        print(f"[Device A] Notes: {rows}")
-    
-    # Cleanup
-    device_a.close()
-    device_b.close()
-    
-    for f in ["demo_device_a.db", "demo_device_b.db", "sync_a_to_b.bundle", "sync_b_to_a.bundle"]:
-        if os.path.exists(f):
-            os.remove(f)
-    
-    print("\n✅ Basic sync demo completed!")
-
-
-def demo_conflict_resolution():
-    """Demonstrate conflict detection and resolution."""
-    print("\n" + "="*60)
-    print("DEMO: Conflict Detection and Resolution")
-    print("="*60 + "\n")
-    
-    device_a = create_demo_database("Device A", "demo_conflict_a.db")
-    device_b = create_demo_database("Device B", "demo_conflict_b.db")
-    
-    # Both devices create notes with same data initially
-    for dev, name in [(device_a, "Device A"), (device_b, "Device B")]:
-        dev.connection.execute(
-            "INSERT INTO notes (id, title, content) VALUES (1, 'Shared Note', 'Initial content')"
-        )
-        dev.connection.commit()
-        print(f"[{name}] Created initial note")
-    
-    # Sync to establish baseline
-    time.sleep(0.1)  # Ensure different timestamps
-    
-    # Device A modifies the note
-    device_a.connection.execute(
-        "UPDATE notes SET content = 'Modified by Device A' WHERE id = 1"
-    )
-    device_a.connection.commit()
-    print("[Device A] Modified note")
-    
-    time.sleep(0.1)
-    
-    # Device B also modifies the note (conflict!)
-    device_b.connection.execute(
-        "UPDATE notes SET content = 'Modified by Device B' WHERE id = 1"
-    )
-    device_b.connection.commit()
-    print("[Device B] Modified note (creates conflict)")
-    
-    # Generate and import bundles
-    bundle_ab = device_a.generate_bundle(device_b.device_id, "conflict_a_to_b.bundle")
-    if bundle_ab:
-        result = device_b.import_bundle(bundle_ab)
-        print(f"\n[Device B] Import result: {result.applied_count} applied, {result.conflict_count} conflicts")
+        # Device A inserts data
+        engine_a.connection.execute("INSERT INTO notes (title) VALUES ('Note 1 from A')")
+        engine_a.connection.execute("INSERT INTO notes (title) VALUES ('Note 2 from A')")
+        engine_a.connection.commit()
+        print("    2 notes inserted")
         
-        # Check conflicts
-        conflicts = device_b.get_unresolved_conflicts()
-        print(f"[Device B] Unresolved conflicts: {len(conflicts)}")
-        for c in conflicts:
-            print(f"  - Table: {c.table_name}, Row: {c.row_pk.hex()[:16]}...")
+        # Create Device B
+        print("\n[2] Creating Device B...")
+        engine_b = SyncEngine(db_b)
+        device_b_id = engine_b.initialize()
+        print(f"    Device B ID: {device_b_id.hex()[:8]}")
+        
+        engine_b.connection.execute('CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)')
+        engine_b.connection.commit()
+        engine_b.enable_sync_for_table('notes')
+        print("    Table 'notes' created and sync enabled")
+        
+        # Generate bundle from A for B
+        print("\n[3] Generating bundle: A -> B")
+        bundle_path = engine_a.generate_bundle(device_b_id, bundle_ab)
+        if bundle_path:
+            print(f"    Bundle created at {os.path.basename(bundle_path)}")
+            
+            # Import on B
+            print("\n[4] Device B importing bundle...")
+            result = engine_b.import_bundle(bundle_path)
+            print(f"    Applied: {result.applied_count}, Conflicts: {result.conflict_count}")
+            
+            # Verify
+            cursor = engine_b.connection.execute("SELECT * FROM notes ORDER BY id")
+            rows = cursor.fetchall()
+            print(f"    Notes on B: {rows}")
+        else:
+            print("    (No operations to send)")
+        
+        # Device B creates a note
+        print("\n[5] Device B creating a note...")
+        engine_b.connection.execute("INSERT INTO notes (title) VALUES ('Note from B')")
+        engine_b.connection.commit()
+        print("    Note inserted")
+        
+        # Sync back: B -> A
+        print("\n[6] Syncing back: B -> A")
+        bundle_path = engine_b.generate_bundle(device_a_id, bundle_ba)
+        if bundle_path:
+            result = engine_a.import_bundle(bundle_path)
+            print(f"    Applied: {result.applied_count}, Conflicts: {result.conflict_count}")
+            
+            cursor = engine_a.connection.execute("SELECT * FROM notes ORDER BY id")
+            rows = cursor.fetchall()
+            print(f"    Notes on A: {rows}")
+        
+        # Cleanup
+        engine_a.close()
+        engine_b.close()
+        
+    finally:
+        # Clean up temp files
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
     
-    # Cleanup
-    device_a.close()
-    device_b.close()
-    
-    for f in ["demo_conflict_a.db", "demo_conflict_b.db", "conflict_a_to_b.bundle"]:
-        if os.path.exists(f):
-            os.remove(f)
-    
-    print("\n✅ Conflict resolution demo completed!")
-
-
-def demo_log_compaction():
-    """Demonstrate log compaction."""
-    print("\n" + "="*60)
-    print("DEMO: Log Compaction")
-    print("="*60 + "\n")
-    
-    engine = create_demo_database("Main", "demo_compaction.db")
-    
-    # Create many operations
-    print("[Main] Creating 100 operations...")
-    for i in range(100):
-        engine.connection.execute(
-            "INSERT INTO notes (title) VALUES (?)",
-            (f"Note #{i}",)
-        )
-    engine.connection.commit()
-    
-    # Check log size
-    compactor = LogCompactor(engine.connection)
-    stats_before = compactor.get_log_stats()
-    print(f"[Main] Operations before: {stats_before['total_operations']}")
-    
-    # Create snapshot
-    print("[Main] Creating snapshot...")
-    snapshot = compactor.create_snapshot()
-    print(f"[Main] Snapshot created: {snapshot.row_count} rows, {snapshot.size_bytes} bytes")
-    
-    # Simulate acknowledgment and compaction
-    ops = engine.get_new_operations()
-    if ops:
-        compactor.record_acknowledgment(os.urandom(16), ops[-1].op_id)
-    
-    result = compactor.compact_log()
-    print(f"[Main] Compaction: {result.ops_removed} ops removed")
-    
-    # Cleanup
-    engine.close()
-    os.remove("demo_compaction.db")
-    
-    print("\n✅ Log compaction demo completed!")
+    print("\n" + "=" * 50)
+    print("DEMO COMPLETED SUCCESSFULLY!")
+    print("=" * 50)
 
 
 if __name__ == "__main__":
-    print("="*60)
-    print("SQLite Sync Core - Desktop Demo")
-    print("="*60)
-    
     demo_basic_sync()
-    demo_conflict_resolution()
-    demo_log_compaction()
-    
-    print("\n" + "="*60)
-    print("All demos completed successfully!")
-    print("="*60)
