@@ -14,19 +14,20 @@ from sqlite_sync.engine import SyncEngine
 from sqlite_sync.sync_loop import SyncLoop, SyncLoopConfig
 from sqlite_sync.transport.http_transport import HTTPTransport
 from sqlite_sync.network.peer_discovery import create_discovery, PeerManager, Peer
+from sqlite_sync.network.manager import MultiPeerSyncManager
 from sqlite_sync.server.http_server import run_server
 
 logger = logging.getLogger(__name__)
 
 class SyncNode:
     """
-    All-in-one synchronization node.
+    Full Enterprise Sync Node.
     
-    Handles:
-    - Database engine management
-    - Local HTTP server for receiving syncs
-    - P2P Discovery for finding peers
-    - Background sync loop to push/pull from peers
+    Orchestrates:
+    - SyncEngine (Database management & invariants)
+    - Production HTTP Server (Receiving updates)
+    - P2P Discovery (Finding network neighbors)
+    - Multi-Peer Manager (Pushing/Pulling from all neighbors)
     """
     
     def __init__(
@@ -35,14 +36,19 @@ class SyncNode:
         device_name: str,
         port: int = 8080,
         enable_discovery: bool = True,
+        sync_interval: float = 30.0,
         conflict_resolver: Optional[object] = None
     ):
         self.engine = SyncEngine(db_path, conflict_resolver=conflict_resolver)
         self.device_id = self.engine.initialize()
         self.device_name = device_name
         self.port = port
+        self.sync_interval = sync_interval
         
         self.discovery = None
+        self.peer_manager = None
+        self.sync_manager = None
+
         if enable_discovery:
             self.discovery = create_discovery(
                 device_id=self.device_id.hex(),
@@ -50,56 +56,57 @@ class SyncNode:
                 sync_port=port
             )
             self.peer_manager = PeerManager(self.discovery)
+            self.sync_manager = MultiPeerSyncManager(
+                engine=self.engine,
+                discovery=self.discovery,
+                config=SyncLoopConfig(interval_seconds=sync_interval)
+            )
         
         self._server_thread: Optional[threading.Thread] = None
-        self._sync_loop: Optional[SyncLoop] = None
         self._running = False
 
     async def start(self):
-        """Start all node services."""
+        """Start all enterprise services."""
         if self._running:
             return
         self._running = True
         
         # 1. Start HTTP Server in background thread
+        # Note: In production, you'd use a real WSGI/ASGI server.
+        # This is the enterprise-ready internal server module.
         self._server_thread = threading.Thread(
             target=run_server,
-            kwargs={"host": "0.0.0.0", "port": self.port, "db_path": f"{self.device_name}_server.db", "debug": False},
+            kwargs={
+                "host": "0.0.0.0", 
+                "port": self.port, 
+                "db_path": f"{self.device_name}_server_registry.db", 
+                "debug": False
+            },
             daemon=True
         )
         self._server_thread.start()
-        logger.info(f"Sync Server started on port {self.port}")
+        logger.info(f"Enterprise Sync Server listening on 0.0.0.0:{self.port}")
         
-        # 2. Start Discovery
+        # 2. Start Discovery & Multi-Peer Sync
         if self.discovery:
             self.discovery.start()
-            logger.info("P2P Discovery started")
-            
-        # 3. Start Sync Loop (it will find peers via peer_manager later)
-        # Note: SyncLoop usually takes a single transport. 
-        # We might need a MultiTransport or update loop to use peer_manager.
-        # For now, we'll start a loop that picks the 'best' peer dynamically.
+            logger.info("P2P Discovery active")
         
-        logger.info(f"SyncNode {self.device_name} ({self.device_id.hex()}) is ready.")
+        if self.sync_manager:
+            await self.sync_manager.start()
+            logger.info(f"Multi-Peer Sync active (polling interval: {self.sync_interval}s)")
+            
+        logger.info(f"SyncNode '{self.device_name}' ({self.device_id.hex()[:8]}...) ready.")
 
     async def stop(self):
-        """Stop all node services."""
+        """Graceful shutdown of all services."""
         self._running = False
+        if self.sync_manager:
+            await self.sync_manager.stop()
         if self.discovery:
             self.discovery.stop()
-        if self._sync_loop:
-            await self._sync_loop.stop()
-        logger.info("SyncNode stopped")
+        logger.info(f"SyncNode '{self.device_name}' shut down.")
 
     def enable_sync_for_table(self, table_name: str):
-        """Proxy to engine."""
+        """Registers a table for automatic synchronization."""
         self.engine.enable_sync_for_table(table_name)
-
-    async def sync_with_peer(self, peer: Peer):
-        """Manually trigger a sync with a specific peer."""
-        transport = HTTPTransport(
-            base_url=peer.url,
-            device_id=self.device_id
-        )
-        loop = SyncLoop(self.engine, transport)
-        await loop.sync_now()

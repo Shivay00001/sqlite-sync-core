@@ -50,6 +50,9 @@ all = [
     "cryptography>=41.0.0",
 ]
 
+[project.scripts]
+sqlite-sync = "sqlite_sync.cli.main:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
