@@ -5,6 +5,7 @@ Generates a bundle containing operations that a peer hasn't seen.
 Bundles are self-contained SQLite files.
 """
 
+import os
 import sqlite3
 import time
 from typing import Final
@@ -56,6 +57,8 @@ def generate_bundle(
     
     # Create bundle database
     try:
+        if os.path.exists(output_path):
+            os.remove(output_path)
         bundle_conn = sqlite3.connect(output_path)
         
         # Create bundle schema
@@ -66,10 +69,10 @@ def generate_bundle(
         bundle_conn.executemany(
             """
             INSERT INTO bundle_operations (
-                op_id, device_id, parent_op_id, vector_clock,
+                op_id, device_id, parent_op_id, vector_clock, hlc,
                 table_name, op_type, row_pk, old_values, new_values,
                 schema_version, created_at, is_local, applied_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             operations,
         )

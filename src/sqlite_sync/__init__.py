@@ -15,7 +15,7 @@ from sqlite_sync.errors import (
 )
 
 # Core
-__version__ = "0.2.0"
+__version__ = "0.5.0-advanced"
 __all__ = [
     # Core
     "SyncEngine",
@@ -25,10 +25,7 @@ __all__ = [
     "BundleError",
     "ConflictError",
     "InvariantViolationError",
-    "SyncNode",
 ]
-
-from sqlite_sync.node import SyncNode
 
 # Optional enterprise imports (fail gracefully if deps missing)
 try:

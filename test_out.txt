@@ -1,0 +1,42 @@
+Traceback (most recent call last):
+  File "C:\info\sqlite_sync_core\src\sqlite_sync\db\connection.py", line 181, in execute_in_transaction
+    result = operation(conn)
+             ^^^^^^^^^^^^^^^
+  File "C:\info\sqlite_sync_core\src\sqlite_sync\engine.py", line 157, in do_import
+    conn.execute("INSERT OR REPLACE INTO sync_metadata (key, value) VALUES ('disable_triggers', '1')")
+sqlite3.IntegrityError: cannot store TEXT value in BLOB column sync_metadata.value
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\info\sqlite_sync_core\advanced_sync_test.py", line 74, in run_test
+    res = engine_b.import_bundle(bundle_path)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\info\sqlite_sync_core\src\sqlite_sync\engine.py", line 214, in import_bundle
+    return execute_in_transaction(conn, do_import)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\info\sqlite_sync_core\src\sqlite_sync\db\connection.py", line 188, in execute_in_transaction
+    raise DatabaseError(
+sqlite_sync.errors.DatabaseError: Transaction failed: cannot store TEXT value in BLOB column sync_metadata.value [operation='transaction']
+STARTING: Advanced Field-Level Convergence Test
+DEBUG: Setting up test_device_a.db...
+DEBUG: Removed existing test_device_a.db
+DEBUG: Created test_device_a.db with table users
+DEBUG: Setting up test_device_b.db...
+DEBUG: Removed existing test_device_b.db
+DEBUG: Created test_device_b.db with table users
+
+--- NODE A: Initialize ---
+DEBUG: Node A initialized and sync enabled
+DEBUG: Node A inserted row 1
+
+--- NODE B: Initialize & Sync Initial ---
+DEBUG: Node B initialized and sync enabled
+DEBUG: Generating bundle on Node A for Node B...
+DEBUG: Bundle contains 1 operations
+DEBUG: Op: INSERT on users at 0
+DEBUG: Checking Node B state before import...
+DEBUG: Node B users count: 0
+DEBUG: Importing bundle on Node B...
+
+ERROR: Transaction failed: cannot store TEXT value in BLOB column sync_metadata.value [operation='transaction']

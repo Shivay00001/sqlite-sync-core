@@ -103,9 +103,9 @@ print(f"Conflicts Detected: {result.conflict_count}")
 | # | Invariant | Description |
 |---|-----------|-------------|
 | 1 | **Append-only** | Operation history is immutable. |
-| 2 | **Causal consistency** | Vector clocks ensure correct partial ordering. |
+| 2 | **Causal consistency** | Hybrid Logical Clocks (HLC) ensure correct partial ordering and wall-clock correlation. |
 | 3 | **Deterministic** | Replay results are identical across all replicas. |
-| 4 | **Idempotent** | Processing the same bundle twice is a no-op. |
+| 4 | **Field-Level Merge** | "Smart" LWW resolution merges concurrent non-conflicting field updates. |
 
 ---
 

@@ -17,12 +17,14 @@ INSERT_TRIGGER_TEMPLATE: Final[str] = """
 CREATE TRIGGER IF NOT EXISTS {table_name}_sync_insert 
 AFTER INSERT ON {table_name}
 FOR EACH ROW
+WHEN sync_is_disabled() = 0
 BEGIN
     INSERT INTO sync_operations (
         op_id,
         device_id,
         parent_op_id,
         vector_clock,
+        hlc,
         table_name,
         op_type,
         row_pk,
@@ -44,15 +46,16 @@ BEGIN
             (SELECT value FROM sync_metadata WHERE key = 'device_id'),
             (SELECT value FROM sync_metadata WHERE key = 'vector_clock')
         ),
+        sync_hlc_now((SELECT value FROM sync_metadata WHERE key = 'device_id')),
         '{table_name}',
         'INSERT',
         sync_pack_pk({pk_expression_new}),
         NULL,
         sync_pack_values(json_object({column_pairs_new})),
         CAST((SELECT value FROM sync_metadata WHERE key = 'schema_version') AS INTEGER),
-        CAST((unixepoch('subsec') * 1000000) AS INTEGER),
+        CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER),
         1,
-        CAST((unixepoch('subsec') * 1000000) AS INTEGER)
+        CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER)
     ;
     
     UPDATE sync_metadata 
@@ -69,12 +72,14 @@ UPDATE_TRIGGER_TEMPLATE: Final[str] = """
 CREATE TRIGGER IF NOT EXISTS {table_name}_sync_update 
 AFTER UPDATE ON {table_name}
 FOR EACH ROW
+WHEN sync_is_disabled() = 0
 BEGIN
     INSERT INTO sync_operations (
         op_id,
         device_id,
         parent_op_id,
         vector_clock,
+        hlc,
         table_name,
         op_type,
         row_pk,
@@ -96,15 +101,16 @@ BEGIN
             (SELECT value FROM sync_metadata WHERE key = 'device_id'),
             (SELECT value FROM sync_metadata WHERE key = 'vector_clock')
         ),
+        sync_hlc_now((SELECT value FROM sync_metadata WHERE key = 'device_id')),
         '{table_name}',
         'UPDATE',
         sync_pack_pk({pk_expression_new}),
         sync_pack_values(json_object({column_pairs_old})),
         sync_pack_values(json_object({column_pairs_new})),
         CAST((SELECT value FROM sync_metadata WHERE key = 'schema_version') AS INTEGER),
-        CAST((unixepoch('subsec') * 1000000) AS INTEGER),
+        CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER),
         1,
-        CAST((unixepoch('subsec') * 1000000) AS INTEGER)
+        CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER)
     ;
     
     UPDATE sync_metadata 
@@ -121,12 +127,14 @@ DELETE_TRIGGER_TEMPLATE: Final[str] = """
 CREATE TRIGGER IF NOT EXISTS {table_name}_sync_delete 
 AFTER DELETE ON {table_name}
 FOR EACH ROW
+WHEN sync_is_disabled() = 0
 BEGIN
     INSERT INTO sync_operations (
         op_id,
         device_id,
         parent_op_id,
         vector_clock,
+        hlc,
         table_name,
         op_type,
         row_pk,
@@ -148,15 +156,16 @@ BEGIN
             (SELECT value FROM sync_metadata WHERE key = 'device_id'),
             (SELECT value FROM sync_metadata WHERE key = 'vector_clock')
         ),
+        sync_hlc_now((SELECT value FROM sync_metadata WHERE key = 'device_id')),
         '{table_name}',
         'DELETE',
         sync_pack_pk({pk_expression_old}),
         sync_pack_values(json_object({column_pairs_old})),
         NULL,
         CAST((SELECT value FROM sync_metadata WHERE key = 'schema_version') AS INTEGER),
-        CAST((unixepoch('subsec') * 1000000) AS INTEGER),
+        CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER),
         1,
-        CAST((unixepoch('subsec') * 1000000) AS INTEGER)
+        CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER)
     ;
     
     UPDATE sync_metadata 

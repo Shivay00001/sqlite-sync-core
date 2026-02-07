@@ -11,7 +11,7 @@ All operations return canonical JSON (sorted keys) for determinism.
 """
 
 import json
-from typing import Final
+from typing import Final, Any
 
 from sqlite_sync.errors import ValidationError
 from sqlite_sync.invariants import Invariants
@@ -21,69 +21,50 @@ from sqlite_sync.invariants import Invariants
 EMPTY_VECTOR_CLOCK: Final[str] = "{}"
 
 
-def increment_vector_clock(device_id: bytes, vc_json: str) -> str:
+def increment_vector_clock(device_id: Any, vc_json: Any) -> str:
     """
     Increment the counter for a device in the vector clock.
-    
-    Used when this device creates a new operation.
-    
-    Args:
-        device_id: 16-byte device UUID
-        vc_json: Current vector clock as JSON string
-        
-    Returns:
-        New vector clock as canonical JSON string
-        
-    Raises:
-        ValidationError: If inputs are invalid
     """
+    # SQLite might pass memoryview for BLOBs
+    if isinstance(device_id, memoryview):
+        device_id = bytes(device_id)
+        
     if not isinstance(device_id, bytes) or len(device_id) != 16:
-        raise ValidationError(
-            f"device_id must be 16 bytes, got {type(device_id).__name__}",
-            field="device_id",
-        )
+        raise ValidationError(f"device_id must be 16 bytes", field="device_id")
+    
+    if vc_json is None:
+        vc_json = EMPTY_VECTOR_CLOCK
+    elif isinstance(vc_json, (bytes, memoryview)):
+        vc_json = bytes(vc_json).decode("utf-8")
     
     try:
         vc = json.loads(vc_json)
-    except json.JSONDecodeError as e:
-        raise ValidationError(
-            f"Invalid vector clock JSON: {e}",
-            field="vc_json",
-            value=vc_json[:100] if len(vc_json) > 100 else vc_json,
-        ) from e
+    except Exception as e:
+        raise ValidationError(f"Invalid vector clock JSON: {e}", field="vc_json")
     
     device_hex = device_id.hex()
     vc[device_hex] = vc.get(device_hex, 0) + 1
-    
-    # Return canonical JSON (sorted keys)
     return json.dumps(vc, sort_keys=True)
 
 
-def merge_vector_clocks(vc1_json: str, vc2_json: str) -> str:
+def merge_vector_clocks(vc1_json: Any, vc2_json: Any) -> str:
     """
     Merge two vector clocks (take max for each device).
-    
-    Used when importing operations to update local vector clock.
-    
-    Args:
-        vc1_json: First vector clock as JSON
-        vc2_json: Second vector clock as JSON
-        
-    Returns:
-        Merged vector clock as canonical JSON
     """
+    def _parse(val):
+        if val is None: return {}
+        if isinstance(val, (bytes, memoryview)):
+            val = bytes(val).decode("utf-8")
+        return json.loads(val)
+
     try:
-        vc1 = json.loads(vc1_json)
-        vc2 = json.loads(vc2_json)
-    except json.JSONDecodeError as e:
-        raise ValidationError(
-            f"Invalid vector clock JSON: {e}",
-            field="vector_clock",
-        ) from e
+        vc1 = _parse(vc1_json)
+        vc2 = _parse(vc2_json)
+    except Exception as e:
+        raise ValidationError(f"Invalid vector clock JSON: {e}", field="vector_clock")
     
     merged: dict[str, int] = {}
     all_devices = set(vc1.keys()) | set(vc2.keys())
-    
     for device in all_devices:
         merged[device] = max(vc1.get(device, 0), vc2.get(device, 0))
     

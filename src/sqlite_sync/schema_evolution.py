@@ -96,7 +96,15 @@ class SchemaManager:
             "SELECT MAX(version) FROM sync_schema_versions"
         )
         result = cursor.fetchone()[0]
-        return result if result is not None else 0
+        if result is not None:
+            return result
+            
+        # Fallback to sync_metadata if versions table is empty
+        try:
+            from sqlite_sync.db.migrations import get_schema_version
+            return get_schema_version(self._conn)
+        except Exception:
+            return 0
     
     def compute_schema_hash(self) -> str:
         """Compute hash of current schema for comparison."""

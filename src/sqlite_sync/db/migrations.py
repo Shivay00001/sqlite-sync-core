@@ -49,10 +49,13 @@ def initialize_sync_tables(conn: sqlite3.Connection) -> bytes:
             for sql in statement.strip().split(";"):
                 sql = sql.strip()
                 if sql:
+                    # print(f"DEBUG: Executing SQL: {sql}")
                     conn.execute(sql)
     except sqlite3.Error as e:
+        # Get the failing SQL if possible
+        failed_sql = locals().get('sql', 'unknown')
         raise DatabaseError(
-            f"Failed to create sync tables: {e}",
+            f"Failed to create sync tables: {e} (SQL: {failed_sql})",
             operation="create_tables",
         ) from e
 

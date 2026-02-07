@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sqlite-sync-core"
-version = "0.2.1"
+version = "0.5.0"
 description = "Universal SQLite Synchronization Core - A dependency-grade, local-first, offline-first SQLite synchronization primitive"
 readme = "README.md"
 license = {text = "AGPL-3.0"}

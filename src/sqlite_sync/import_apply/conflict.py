@@ -62,18 +62,25 @@ def detect_conflict(
     Returns:
         The conflicting local operation if conflict detected, None otherwise
     """
+    import sys
     incoming_vc = parse_vector_clock(incoming_op.vector_clock)
     
     existing_ops = get_operations_for_row(
         conn, incoming_op.table_name, incoming_op.row_pk
     )
     
+    # sys.stderr.write(f"DEBUG: detect_conflict for {incoming_op.op_id.hex()} on {incoming_op.table_name}:{incoming_op.row_pk}\n")
+    # sys.stderr.write(f"  Found {len(existing_ops)} existing ops\n")
+    
     for existing_op in existing_ops:
         existing_vc = parse_vector_clock(existing_op.vector_clock)
         
         if are_concurrent(incoming_vc, existing_vc):
             # Concurrent modification = conflict
+            # sys.stderr.write(f"  CONFLICT DETECTED with {existing_op.op_id.hex()}\n")
             return existing_op
+        # else:
+            # sys.stderr.write(f"  Not concurrent with {existing_op.op_id.hex()} (Inc: {incoming_vc}, Ex: {existing_vc})\n")
     
     return None
 

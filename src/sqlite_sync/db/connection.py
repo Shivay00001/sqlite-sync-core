@@ -7,9 +7,14 @@ registration of application-defined SQL functions.
 All connections use WAL mode for concurrent read/write.
 """
 
+import logging
 import sqlite3
-from typing import Callable, Any
+import json
+import time
 
+logger = logging.getLogger("sqlite_sync.db")
+
+from typing import Callable, Any
 from sqlite_sync.config import SQLITE_PRAGMAS
 from sqlite_sync.errors import DatabaseError
 
@@ -85,31 +90,61 @@ def _register_functions(conn: sqlite3.Connection) -> None:
     from sqlite_sync.log.vector_clock import increment_vector_clock, merge_vector_clocks
     from sqlite_sync.utils.msgpack_codec import pack_primary_key, pack_dict
     import json
+    import sys
 
     # sync_uuid_v7() -> BLOB(16)
-    conn.create_function("sync_uuid_v7", 0, generate_uuid_v7)
+    def _uuid_v7() -> bytes:
+        return generate_uuid_v7()
+
+    conn.create_function("sync_uuid_v7", 0, _uuid_v7)
 
     # sync_vector_clock_increment(device_id BLOB, vc_json TEXT) -> TEXT
-    def _vc_increment(device_id: bytes, vc_json: str) -> str:
+    def _vc_increment(device_id: Any, vc_json: Any) -> str:
         return increment_vector_clock(device_id, vc_json)
 
     conn.create_function("sync_vector_clock_increment", 2, _vc_increment)
 
     # sync_vector_clock_merge(vc1_json TEXT, vc2_json TEXT) -> TEXT
-    def _vc_merge(vc1_json: str, vc2_json: str) -> str:
+    def _vc_merge(vc1_json: Any, vc2_json: Any) -> str:
         return merge_vector_clocks(vc1_json, vc2_json)
 
     conn.create_function("sync_vector_clock_merge", 2, _vc_merge)
 
     # sync_pack_pk(value) -> BLOB
-    conn.create_function("sync_pack_pk", 1, pack_primary_key)
+    def _pack_pk(value: Any) -> bytes:
+        return pack_primary_key(value)
+
+    conn.create_function("sync_pack_pk", 1, _pack_pk)
 
     # sync_pack_values(json_str TEXT) -> BLOB
-    def _pack_values(json_str: str) -> bytes:
+    def _pack_values(json_str: Any) -> bytes:
+        if not json_str: return b""
         data = json.loads(json_str)
         return pack_dict(data)
 
     conn.create_function("sync_pack_values", 1, _pack_values)
+
+    # sync_hlc_now(node_id TEXT) -> TEXT
+    def _hlc_now_placeholder(node_id: Any) -> str:
+        return f"{int(time.time() * 1000)}:0:{node_id}"
+
+    conn.create_function("sync_hlc_now", 1, _hlc_now_placeholder)
+
+    if not hasattr(_register_functions, "_disabled_state"):
+        _register_functions._disabled_state = {}
+
+    def _sync_is_disabled() -> int:
+        return _register_functions._disabled_state.get(id(conn), 0)
+
+    conn.create_function("sync_is_disabled", 0, _sync_is_disabled)
+
+
+def set_sync_disabled(conn: sqlite3.Connection, disabled: bool) -> None:
+    """Set the sync-disabled state for a specific connection."""
+    val = 1 if disabled else 0
+    if not hasattr(_register_functions, "_disabled_state"):
+        _register_functions._disabled_state = {}
+    _register_functions._disabled_state[id(conn)] = val
 
 
 def execute_in_transaction(
