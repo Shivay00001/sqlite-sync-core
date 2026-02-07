@@ -124,10 +124,19 @@ class SyncLoop:
     
     async def _loop(self) -> None:
         """Main sync loop."""
+        sync_count = 0
         while self._running:
             try:
                 await self._do_sync()
                 self._retry_count = 0
+                
+                # Auto-compaction every 10 syncs
+                sync_count += 1
+                if sync_count >= 10:
+                    logger.info("Triggering auto-compaction")
+                    self._engine.compact_log()
+                    sync_count = 0
+                    
                 await asyncio.sleep(self._config.interval_seconds)
                 
             except asyncio.CancelledError:

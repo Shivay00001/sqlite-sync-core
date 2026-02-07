@@ -25,7 +25,10 @@ __all__ = [
     "BundleError",
     "ConflictError",
     "InvariantViolationError",
+    "SyncNode",
 ]
+
+from sqlite_sync.node import SyncNode
 
 # Optional enterprise imports (fail gracefully if deps missing)
 try:
