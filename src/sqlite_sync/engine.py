@@ -22,16 +22,18 @@ from sqlite_sync.db.migrations import (
     get_vector_clock,
     update_vector_clock,
 )
+from sqlite_sync.import_apply.conflict import (
+    SyncConflict,
+    detect_conflict,
+    record_conflict,
+    is_dominated,
+    get_unresolved_conflicts as _get_unresolved_conflicts,
+)
+from sqlite_sync.import_apply.apply import apply_operation as _apply_operation
 from sqlite_sync.db.triggers import install_triggers_for_table, has_triggers
 from sqlite_sync.bundle.validate import validate_bundle
 from sqlite_sync.bundle.generate import generate_bundle as _generate_bundle
 from sqlite_sync.bundle.format import BundleMetadata
-from sqlite_sync.log.operations import (
-    SyncOperation,
-    operation_from_row,
-    insert_operation,
-    operation_exists,
-)
 from sqlite_sync.log.vector_clock import (
     parse_vector_clock,
     serialize_vector_clock,
@@ -40,14 +42,13 @@ from sqlite_sync.log.vector_clock import (
 )
 from sqlite_sync.import_apply.dedup import is_bundle_already_imported
 from sqlite_sync.import_apply.ordering import sort_operations_deterministically
-from sqlite_sync.import_apply.conflict import (
-    SyncConflict,
-    detect_conflict,
-    record_conflict,
-    is_dominated,
-    get_unresolved_conflicts as _get_unresolved_conflicts,
+from sqlite_sync.log.operations import (
+    SyncOperation,
+    operation_from_row,
+    insert_operation,
+    operation_exists,
+    get_operations_since,
 )
-from sqlite_sync.import_apply.apply import apply_operation
 from sqlite_sync.audit.import_log import record_import
 from sqlite_sync.errors import SyncError, SchemaError, BundleError, DatabaseError
 from sqlite_sync.config import SCHEMA_VERSION
@@ -412,6 +413,108 @@ class SyncEngine:
             List of unresolved conflicts
         """
         return _get_unresolved_conflicts(self.connection)
+
+    def apply_operation(self, op: SyncOperation) -> bool:
+        """
+        Apply a single operation to the database.
+        
+        This is used for real-time streaming sync.
+        It handles conflict detection, deduplication, and vector clock updates.
+        
+        Args:
+            op: SyncOperation to apply
+            
+        Returns:
+            True if applied, False if skipped (duplicate/conflict)
+        """
+        conn = self.connection
+        
+        def do_apply(conn: sqlite3.Connection) -> bool:
+            if operation_exists(conn, op.op_id):
+                return False
+                
+            conflicting_op = detect_conflict(conn, op)
+            if conflicting_op is not None:
+                # Record remote op but mark as not applied
+                remote_op = SyncOperation(
+                    op_id=op.op_id,
+                    device_id=op.device_id,
+                    parent_op_id=op.parent_op_id,
+                    vector_clock=op.vector_clock,
+                    table_name=op.table_name,
+                    op_type=op.op_type,
+                    row_pk=op.row_pk,
+                    old_values=op.old_values,
+                    new_values=op.new_values,
+                    schema_version=op.schema_version,
+                    created_at=op.created_at,
+                    is_local=False,
+                    applied_at=None,
+                )
+                insert_operation(conn, remote_op)
+                record_conflict(conn, op.table_name, op.row_pk, conflicting_op.op_id, op.op_id)
+                return False
+                
+            if is_dominated(conn, op):
+                # Stale op
+                applied_op = SyncOperation(
+                    op_id=op.op_id,
+                    device_id=op.device_id,
+                    parent_op_id=op.parent_op_id,
+                    vector_clock=op.vector_clock,
+                    table_name=op.table_name,
+                    op_type=op.op_type,
+                    row_pk=op.row_pk,
+                    old_values=op.old_values,
+                    new_values=op.new_values,
+                    schema_version=op.schema_version,
+                    created_at=op.created_at,
+                    is_local=False,
+                    applied_at=int(time.time() * 1_000_000),
+                )
+                insert_operation(conn, applied_op)
+                return True
+
+            # Apply to user table
+            _apply_operation(conn, op)
+            
+            applied_op = SyncOperation(
+                op_id=op.op_id,
+                device_id=op.device_id,
+                parent_op_id=op.parent_op_id,
+                vector_clock=op.vector_clock,
+                table_name=op.table_name,
+                op_type=op.op_type,
+                row_pk=op.row_pk,
+                old_values=op.old_values,
+                new_values=op.new_values,
+                schema_version=op.schema_version,
+                created_at=op.created_at,
+                is_local=False,
+                applied_at=int(time.time() * 1_000_000),
+            )
+            insert_operation(conn, applied_op)
+            
+            # Merge vector clock
+            current_vc_json = serialize_vector_clock(get_vector_clock(conn))
+            merged_vc_json = merge_vector_clocks(current_vc_json, op.vector_clock)
+            update_vector_clock(conn, parse_vector_clock(merged_vc_json))
+            
+            return True
+
+        return execute_in_transaction(conn, do_apply)
+
+    def get_new_operations(self, since_vector_clock: dict[str, int] | None = None) -> list[SyncOperation]:
+        """
+        Get operations generated on this device that the peer might not have.
+        
+        Args:
+            since_vector_clock: Peer's current vector clock. If None, returns all.
+            
+        Returns:
+            List of operations to send to peer.
+        """
+        return get_operations_since(self.connection, since_vector_clock)
     
     def get_vector_clock(self) -> dict[str, int]:
         """

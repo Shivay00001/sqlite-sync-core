@@ -222,6 +222,41 @@ def iter_all_operations(conn: sqlite3.Connection) -> Iterator[SyncOperation]:
         yield operation_from_row(row)
 
 
+from sqlite_sync.log.vector_clock import parse_vector_clock, serialize_vector_clock, is_dominated as vc_is_dominated
+
+def get_operations_since(
+    conn: sqlite3.Connection,
+    since_vc: dict[str, int] | None = None,
+) -> list[SyncOperation]:
+    """
+    Get all local operations that are not known to the peer's vector clock.
+    
+    Args:
+        conn: SQLite connection
+        since_vc: Peer's vector clock
+        
+    Returns:
+        List of operations
+    """
+    cursor = conn.execute(
+        "SELECT * FROM sync_operations WHERE is_local = 1 ORDER BY created_at ASC"
+    )
+    all_local = [operation_from_row(row) for row in cursor.fetchall()]
+    
+    if since_vc is None:
+        return all_local
+        
+    since_vc_json = serialize_vector_clock(since_vc)
+    
+    new_ops = []
+    for op in all_local:
+        # If op's vector clock is NOT dominated by peer's VC, it means peer doesn't have it
+        if not vc_is_dominated(op.vector_clock, since_vc_json):
+            new_ops.append(op)
+            
+    return new_ops
+
+
 def operation_exists(conn: sqlite3.Connection, op_id: bytes) -> bool:
     """
     Check if an operation ID exists.
@@ -238,6 +273,41 @@ def operation_exists(conn: sqlite3.Connection, op_id: bytes) -> bool:
         (op_id,),
     )
     return cursor.fetchone() is not None
+
+
+from sqlite_sync.log.vector_clock import parse_vector_clock, serialize_vector_clock, is_dominated as vc_is_dominated
+
+def get_operations_since(
+    conn: sqlite3.Connection,
+    since_vc: dict[str, int] | None = None,
+) -> list[SyncOperation]:
+    """
+    Get all local operations that are not known to the peer's vector clock.
+    
+    Args:
+        conn: SQLite connection
+        since_vc: Peer's vector clock
+        
+    Returns:
+        List of operations
+    """
+    cursor = conn.execute(
+        "SELECT * FROM sync_operations WHERE is_local = 1 ORDER BY created_at ASC"
+    )
+    all_local = [operation_from_row(row) for row in cursor.fetchall()]
+    
+    if since_vc is None:
+        return all_local
+        
+    since_vc_json = serialize_vector_clock(since_vc)
+    
+    new_ops = []
+    for op in all_local:
+        # If op's vector clock is NOT dominated by peer's VC, it means peer doesn't have it
+        if not vc_is_dominated(op.vector_clock, since_vc_json):
+            new_ops.append(op)
+            
+    return new_ops
 
 
 def insert_operation(conn: sqlite3.Connection, op: SyncOperation) -> None:

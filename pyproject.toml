@@ -23,7 +23,14 @@ classifiers = [
 ]
 dependencies = [
     "msgpack>=1.0.0",
+    "websockets>=12.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/shivay00001/sqlite-sync-core"
+Documentation = "https://github.com/shivay00001/sqlite-sync-core#readme"
+Repository = "https://github.com/shivay00001/sqlite-sync-core.git"
+Issues = "https://github.com/shivay00001/sqlite-sync-core/issues"
 
 [project.optional-dependencies]
 dev = [

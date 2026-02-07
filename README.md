@@ -25,7 +25,13 @@ Captures database changes as structured operations, packages them into self-cont
 
 ## Installation
 
-### From GitHub
+### From PyPI
+
+```bash
+pip install sqlite-sync-core
+```
+
+### From GitHub (Development)
 
 ```bash
 git clone https://github.com/shivay00001/sqlite-sync-core.git
@@ -33,11 +39,48 @@ cd sqlite-sync-core
 pip install -e .
 ```
 
-### From PyPI (coming soon)
+---
+
+## Real-Time Network Sync
+
+SQLite Sync Core now supports real-time synchronization over WebSockets.
+
+### Start the Reference Server
 
 ```bash
-pip install sqlite-sync-core
+python -m sqlite_sync.network.server
 ```
+
+### Connect a Client
+
+```python
+from sqlite_sync import SyncEngine
+from sqlite_sync.network.client import SyncClient
+
+engine = SyncEngine("my_app.db")
+engine.initialize()
+
+client = SyncClient(engine, "ws://localhost:8765")
+await client.connect()
+
+# Listen for remote changes
+asyncio.create_task(client.listen())
+
+# Send local changes
+ops = engine.get_new_operations()
+for op in ops:
+    await client.send_operation(op)
+```
+
+---
+
+## Integration Examples
+
+See the `examples/` directory for full integration samples:
+
+- `basic_usage.py`: Simple CLI setup.
+- `network_sync.py`: Real-time sync between two peers.
+- `desktop_example.py`: Coming soon (GUI integration).
 
 ### Requirements
 

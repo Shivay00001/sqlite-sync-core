@@ -199,3 +199,20 @@ def serialize_vector_clock(vc: dict[str, int]) -> str:
     """
     Invariants.assert_valid_vector_clock(vc)
     return json.dumps(vc, sort_keys=True)
+
+
+def is_dominated(vc1_json: str, vc2_json: str) -> bool:
+    """
+    Check if vc1 dominates vc2 using JSON strings.
+    
+    Args:
+        vc1_json: First vector clock JSON
+        vc2_json: Second vector clock JSON
+        
+    Returns:
+        True if vc1 dominates vc2
+    """
+    vc1 = parse_vector_clock(vc1_json)
+    vc2 = parse_vector_clock(vc2_json)
+    return vector_clock_dominates(vc1, vc2)
+
