@@ -168,10 +168,16 @@ class SyncLoop:
             
             # Receive and apply remote ops
             remote_ops = await self._transport.receive_operations()
-            for op in remote_ops:
-                applied = self._engine.apply_operation(op)
-                if applied:
-                    self._stats.ops_received += 1
+            if remote_ops:
+                # Use apply_batch to handle conflicts/merging
+                # We need source_device_id. SyncOperation has device_id, let's use the first one's ID
+                # or derive from transport if possible.
+                # Assuming all ops in a batch come from the same source for now.
+                source_id = remote_ops[0].device_id 
+                
+                result = self._engine.apply_batch(remote_ops, source_id)
+                self._stats.ops_received += result.applied_count
+                self._stats.conflicts_resolved += result.conflict_count
             
             # Update stats
             self._stats.last_sync_time = time.time()

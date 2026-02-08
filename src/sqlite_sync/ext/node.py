@@ -11,11 +11,11 @@ import threading
 from typing import Optional, List
 
 from sqlite_sync.engine import SyncEngine
-from sqlite_sync.sync_loop import SyncLoop, SyncLoopConfig
+from sqlite_sync.ext.sync_loop import SyncLoop, SyncLoopConfig
 from sqlite_sync.transport.http_transport import HTTPTransport
 from sqlite_sync.network.peer_discovery import create_discovery, PeerManager, Peer
-from sqlite_sync.network.manager import MultiPeerSyncManager
-from sqlite_sync.server.http_server import run_server
+from sqlite_sync.ext.network_manager import MultiPeerSyncManager
+from sqlite_sync.ext.server.http_server import run_server
 
 logger = logging.getLogger(__name__)
 
@@ -39,28 +39,30 @@ class SyncNode:
         sync_interval: float = 30.0,
         conflict_resolver: Optional[object] = None
     ):
-        self.engine = SyncEngine(db_path, conflict_resolver=conflict_resolver)
+        self.engine = SyncEngine(db_path)
+        self.db_path = db_path
         self.device_id = self.engine.initialize()
         self.device_name = device_name
         self.port = port
+        self.enable_discovery = enable_discovery
         self.sync_interval = sync_interval
         
         self.discovery = None
         self.peer_manager = None
         self.sync_manager = None
 
-        if enable_discovery:
-            self.discovery = create_discovery(
-                device_id=self.device_id.hex(),
-                device_name=device_name,
-                sync_port=port
-            )
-            self.peer_manager = PeerManager(self.discovery)
-            self.sync_manager = MultiPeerSyncManager(
-                engine=self.engine,
-                discovery=self.discovery,
-                config=SyncLoopConfig(interval_seconds=sync_interval)
-            )
+        # Always initialize components
+        self.discovery = create_discovery(
+            device_id=self.device_id.hex(),
+            device_name=device_name,
+            sync_port=port
+        )
+        self.peer_manager = PeerManager(self.discovery)
+        self.sync_manager = MultiPeerSyncManager(
+            engine=self.engine,
+            discovery=self.discovery,
+            config=SyncLoopConfig(interval_seconds=sync_interval)
+        )
         
         self._server_thread: Optional[threading.Thread] = None
         self._running = False
@@ -80,7 +82,9 @@ class SyncNode:
                 "host": "0.0.0.0", 
                 "port": self.port, 
                 "db_path": f"{self.device_name}_server_registry.db", 
-                "debug": False
+                "debug": False,
+                "p2p_mode": True,
+                "p2p_db_path": self.db_path
             },
             daemon=True
         )
@@ -88,7 +92,7 @@ class SyncNode:
         logger.info(f"Enterprise Sync Server listening on 0.0.0.0:{self.port}")
         
         # 2. Start Discovery & Multi-Peer Sync
-        if self.discovery:
+        if self.enable_discovery:
             self.discovery.start()
             logger.info("P2P Discovery active")
         

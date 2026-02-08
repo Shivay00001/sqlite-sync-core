@@ -52,7 +52,7 @@ def get_merged_state(
     l_changes = _get_changes(l_new, l_old)
     r_changes = _get_changes(r_new, r_old)
     
-    # sys.stderr.write(f"DEBUG MERGE:\n L_changes: {l_changes}\n R_changes: {r_changes}\n")
+    print(f"DEBUG MERGE:\n L_changes: {l_changes}\n R_changes: {r_changes}\n")
     
     # 3. Merge
     merged = l_new.copy()

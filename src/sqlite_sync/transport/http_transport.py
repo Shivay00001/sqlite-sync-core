@@ -110,7 +110,8 @@ class HTTPTransport(TransportAdapter):
             with urlopen(req, timeout=self._timeout) as response:
                 return json.loads(response.read().decode())
         except HTTPError as e:
-            logger.error(f"HTTP error {e.code}: {e.reason}")
+            error_body = e.read().decode()
+            logger.error(f"HTTP error {e.code}: {e.reason}\nBody: {error_body}")
             raise
         except URLError as e:
             logger.error(f"URL error: {e}")
@@ -130,6 +131,7 @@ class HTTPTransport(TransportAdapter):
             "new_values": op.new_values.hex() if op.new_values else None,
             "schema_version": op.schema_version,
             "created_at": op.created_at,
+            "hlc": op.hlc,
         }
     
     def _deserialize_op(self, data: dict) -> SyncOperation:
@@ -146,6 +148,7 @@ class HTTPTransport(TransportAdapter):
             new_values=bytes.fromhex(data["new_values"]) if data["new_values"] else None,
             schema_version=data["schema_version"],
             created_at=data["created_at"],
+            hlc=data.get("hlc"),
             is_local=False,
             applied_at=None
         )

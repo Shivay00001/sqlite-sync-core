@@ -10,7 +10,7 @@ import logging
 from typing import Dict, Optional, List
 
 from sqlite_sync.engine import SyncEngine
-from sqlite_sync.sync_loop import SyncLoop, SyncLoopConfig
+from sqlite_sync.ext.sync_loop import SyncLoop, SyncLoopConfig
 from sqlite_sync.transport.http_transport import HTTPTransport
 from sqlite_sync.network.peer_discovery import UDPDiscovery, Peer, PeerStatus
 

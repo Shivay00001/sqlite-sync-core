@@ -242,21 +242,38 @@ def get_operations_since(
         List of operations
     """
     cursor = conn.execute(
-        "SELECT * FROM sync_operations WHERE is_local = 1 ORDER BY created_at ASC"
+        "SELECT * FROM sync_operations ORDER BY created_at ASC"
     )
-    all_local = [operation_from_row(row) for row in cursor.fetchall()]
+    all_local = []
+    for row in cursor.fetchall():
+        print(f"DEBUG: ROW RAW: is_local={row[12]} type={type(row[12])}")
+        if row[12] == 1:
+            all_local.append(operation_from_row(row))
+            
+    print(f"DEBUG: get_operations_since: found {len(all_local)} local ops (filtered in python)")
     
     if since_vc is None:
+        print("DEBUG: get_operations_since: since_vc is None, returning all")
         return all_local
         
     since_vc_json = serialize_vector_clock(since_vc)
+    print(f"DEBUG: get_operations_since: filtering against {since_vc_json}")
     
     new_ops = []
     for op in all_local:
-        # If op's vector clock is NOT dominated by peer's VC, it means peer doesn't have it
-        if not vc_is_dominated(op.vector_clock, since_vc_json):
+        # Parse op's vector clock to get its device's counter
+        op_vc = parse_vector_clock(op.vector_clock)
+        op_device = op.device_id.hex()
+        op_counter = op_vc.get(op_device, 0)
+        peer_counter = since_vc.get(op_device, 0)
+        
+        # Include op if its counter is greater than what peer knows for this device
+        is_new = op_counter > peer_counter
+        print(f"DEBUG: op {op.op_id.hex()[:8]} device={op_device[:8]} op_counter={op_counter} peer_counter={peer_counter} is_new={is_new}")
+        if is_new:
             new_ops.append(op)
             
+    print(f"DEBUG: get_operations_since: returning {len(new_ops)} ops")
     return new_ops
 
 

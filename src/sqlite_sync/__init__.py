@@ -15,7 +15,7 @@ from sqlite_sync.errors import (
 )
 
 # Core
-__version__ = "0.5.0-advanced"
+__version__ = "0.5.1"
 __all__ = [
     # Core
     "SyncEngine",
@@ -26,6 +26,64 @@ __all__ = [
     "ConflictError",
     "InvariantViolationError",
 ]
+
+# Enterprise: SyncNode (full orchestration)
+try:
+    from sqlite_sync.ext.node import SyncNode
+    __all__.append("SyncNode")
+except ImportError:
+    pass
+
+# Enterprise: P2P Discovery
+try:
+    from sqlite_sync.network.peer_discovery import (
+        UDPDiscovery,
+        PeerManager,
+        Peer,
+        PeerStatus,
+        DiscoveryConfig,
+        create_discovery,
+    )
+    __all__.extend([
+        "UDPDiscovery",
+        "PeerManager", 
+        "Peer",
+        "PeerStatus",
+        "DiscoveryConfig",
+        "create_discovery",
+    ])
+except ImportError:
+    pass
+
+# Enterprise: Conflict Resolution
+try:
+    from sqlite_sync.resolution import (
+        ResolutionStrategy,
+        ConflictResolver,
+        ConflictContext,
+        ResolutionResult,
+        get_resolver,
+        LastWriteWinsResolver,
+        FieldMergeResolver,
+    )
+    __all__.extend([
+        "ResolutionStrategy",
+        "ConflictResolver",
+        "ConflictContext",
+        "ResolutionResult",
+        "get_resolver",
+        "LastWriteWinsResolver",
+        "FieldMergeResolver",
+    ])
+except ImportError:
+    pass
+
+# Enterprise: Schema Evolution
+try:
+    from sqlite_sync.schema_evolution import SchemaManager, SchemaMigration
+    __all__.extend(["SchemaManager", "SchemaMigration"])
+except ImportError:
+    pass
 
 # Optional enterprise imports (fail gracefully if deps missing)
 try:

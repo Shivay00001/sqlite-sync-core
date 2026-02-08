@@ -236,11 +236,20 @@ class SyncServer:
         self,
         db_path: str = "sync_server.db",
         requests_per_minute: int = 60,
-        operation_ttl_hours: int = 24
+        operation_ttl_hours: int = 24,
+        p2p_mode: bool = False,
+        p2p_db_path: str | None = None
     ):
         self._pool = ConnectionPool(db_path)
         self._rate_limiter = RateLimiter(self._pool, requests_per_minute)
         self._operation_ttl = operation_ttl_hours * 3600
+        self._p2p_mode = p2p_mode
+        self._p2p_engine = None
+        
+        if self._p2p_mode and p2p_db_path:
+            from sqlite_sync.engine import SyncEngine
+            self._p2p_engine = SyncEngine(p2p_db_path)
+            self._p2p_engine.initialize()
     
     def register_device(
         self, 
@@ -325,114 +334,207 @@ class SyncServer:
         except Exception as e:
             logger.error(f"Handshake failed: {e}")
             raise
+
+    def handshake_p2p(self, device_id: str, local_vc: dict) -> dict:
+         """Handshake for P2P: return local VC."""
+         if self._p2p_mode and self._p2p_engine:
+             my_vc = self._p2p_engine.get_vector_clock()
+             return {
+                 "status": "ok",
+                 "vector_clock": my_vc,
+                 "known_devices": [] # In P2P, we don't necessarily gossip known devices here yet
+             }
+         return {}
     
     def push_operations(
         self, 
         source_device_id: str, 
         operations: list[dict]
     ) -> dict:
-        """Receive operations from a device and queue for other devices."""
-        conn = self._pool.get_connection()
-        now = int(time.time())
-        expires_at = now + self._operation_ttl
-        
-        try:
-            # Get all active devices except source
-            cursor = conn.execute(
-                """
-                SELECT device_id FROM devices 
-                WHERE device_id != ? AND status = 'active'
-                """,
-                (source_device_id,)
-            )
+        """Receive operations from a device."""
+        print(f"DEBUG: SyncServer.push_operations called with {len(operations)} ops from {source_device_id}")
+        if self._p2p_mode and self._p2p_engine:
+            # P2P Mode: Apply directly to local engine
+            print(f"DEBUG: push_operations: P2P mode active")
+            print(f"DEBUG: push_operations: P2P mode active. Ops count: {len(operations)}")
+            # Convert dict ops to SyncOperation objects
+            from sqlite_sync.log.operations import SyncOperation
+            # We need a helper to deserialize. 
+            # Ideally HTTPTransport logic should be shared, but for now we manually reconstruct or import.
+            # Wait, SyncOperation constructor is strict.
+            # Let's borrow deserialization logic or assume operations are dicts that match fields.
+            # Better: use the transport's deserialize method? No, that's client side.
+            # We will reimplement basic deserialization here to be safe.
             
-            target_devices = [row['device_id'] for row in cursor]
+            try:
+                sync_ops = []
+                for op_data in operations:
+                     # Check if op_data matches SyncOperation fields
+                     # hex fields need conversion back to bytes
+                    sync_ops.append(SyncOperation(
+                        op_id=bytes.fromhex(op_data["op_id"]),
+                        device_id=bytes.fromhex(op_data["device_id"]),
+                        parent_op_id=bytes.fromhex(op_data["parent_op_id"]) if op_data.get("parent_op_id") else None,
+                        vector_clock=op_data["vector_clock"],
+                        table_name=op_data["table_name"],
+                        op_type=op_data["op_type"],
+                        row_pk=bytes.fromhex(op_data["row_pk"]),
+                        old_values=bytes.fromhex(op_data["old_values"]) if op_data.get("old_values") else None,
+                        new_values=bytes.fromhex(op_data["new_values"]) if op_data.get("new_values") else None,
+                        schema_version=op_data.get("schema_version", 1),
+                        created_at=op_data["created_at"],
+                        hlc=op_data.get("hlc"),
+                        is_local=False,
+                        applied_at=None
+                    ))
+            except Exception as e:
+                print(f"DEBUG: SyncOperation conversion failed: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
             
-            # Queue operations for each target device
-            queued_count = 0
-            for target_device_id in target_devices:
-                for op in operations:
-                    conn.execute(
-                        """
-                        INSERT INTO pending_operations 
-                        (target_device_id, source_device_id, operation_data, created_at, expires_at)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (target_device_id, source_device_id, json.dumps(op), now, expires_at)
-                    )
-                    queued_count += 1
-            
-            conn.commit()
-            
-            self._audit_log(conn, source_device_id, "push", {
-                "operation_count": len(operations),
-                "target_count": len(target_devices)
-            })
-            
-            logger.info(f"Queued {queued_count} operations from {source_device_id}")
+            print(f"DEBUG: calling apply_batch with {len(sync_ops)} ops")
+            result = self._p2p_engine.apply_batch(sync_ops, bytes.fromhex(source_device_id))
+            print(f"DEBUG: apply_batch returned: applied={result.applied_count}")
             
             return {
                 "status": "ok",
-                "accepted_count": len(operations),
-                "queued_for_devices": len(target_devices)
+                "accepted_count": result.applied_count, # Returning applied count as accepted
+                "conflict_count": result.conflict_count
             }
+
+        else:
+            # Relay Mode (Store and Forward)
+            conn = self._pool.get_connection()
+            now = int(time.time())
+            expires_at = now + self._operation_ttl
             
-        except Exception as e:
-            logger.error(f"Push operations failed: {e}")
-            raise
-    
-    def pull_operations(self, device_id: str) -> dict:
-        """Send pending operations to a device."""
-        conn = self._pool.get_connection()
-        now = int(time.time())
-        
-        try:
-            # Get undelivered, non-expired operations
-            cursor = conn.execute(
-                """
-                SELECT id, operation_data FROM pending_operations
-                WHERE target_device_id = ? AND delivered_at IS NULL AND expires_at > ?
-                ORDER BY created_at ASC
-                LIMIT 1000
-                """,
-                (device_id, now)
-            )
-            
-            operations = []
-            op_ids = []
-            
-            for row in cursor:
-                op_ids.append(row['id'])
-                try:
-                    operations.append(json.loads(row['operation_data']))
-                except json.JSONDecodeError:
-                    logger.warning(f"Invalid operation data in queue: {row['id']}")
-            
-            # Mark as delivered
-            if op_ids:
-                placeholders = ','.join(['?'] * len(op_ids))
-                conn.execute(
-                    f"UPDATE pending_operations SET delivered_at = ? WHERE id IN ({placeholders})",
-                    [now] + op_ids
+            try:
+                # Get all active devices except source
+                cursor = conn.execute(
+                    """
+                    SELECT device_id FROM devices 
+                    WHERE device_id != ? AND status = 'active'
+                    """,
+                    (source_device_id,)
                 )
+                
+                target_devices = [row['device_id'] for row in cursor]
+                
+                # Queue operations for each target device
+                queued_count = 0
+                for target_device_id in target_devices:
+                    for op in operations:
+                        conn.execute(
+                            """
+                            INSERT INTO pending_operations 
+                            (target_device_id, source_device_id, operation_data, created_at, expires_at)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (target_device_id, source_device_id, json.dumps(op), now, expires_at)
+                        )
+                        queued_count += 1
+                
+                conn.commit()
+                
+                self._audit_log(conn, source_device_id, "push", {
+                    "operation_count": len(operations),
+                    "target_count": len(target_devices)
+                })
+                
+                logger.info(f"Queued {queued_count} operations from {source_device_id}")
+                
+                return {
+                    "status": "ok",
+                    "accepted_count": len(operations),
+                    "queued_for_devices": len(target_devices)
+                }
+                
+            except Exception as e:
+                logger.error(f"Push operations failed: {e}")
+                raise
+    
+    def pull_operations(self, device_id: str, since_vector_clock: dict = None) -> dict:
+        """Send pending operations to a device."""
+        if self._p2p_mode and self._p2p_engine:
+             # P2P Mode: Serve from local engine
+             ops = self._p2p_engine.get_new_operations(since_vector_clock)
+             
+             # Serialize for transport
+             serialized_ops = []
+             for op in ops:
+                 serialized_ops.append({
+                    "op_id": op.op_id.hex(),
+                    "device_id": op.device_id.hex(),
+                    "parent_op_id": op.parent_op_id.hex() if op.parent_op_id else None,
+                    "vector_clock": op.vector_clock,
+                    "table_name": op.table_name,
+                    "op_type": op.op_type,
+                    "row_pk": op.row_pk.hex(),
+                    "old_values": op.old_values.hex() if op.old_values else None,
+                    "new_values": op.new_values.hex() if op.new_values else None,
+                    "schema_version": op.schema_version,
+                    "created_at": op.created_at,
+                 })
+             
+             return {
+                 "status": "ok",
+                 "operations": serialized_ops,
+                 "count": len(serialized_ops)
+             }
+
+        else:
+            # Relay Mode
+            conn = self._pool.get_connection()
+            now = int(time.time())
             
-            # Update last_seen
-            conn.execute(
-                "UPDATE devices SET last_seen_at = ? WHERE device_id = ?",
-                (now, device_id)
-            )
-            
-            conn.commit()
-            
-            return {
-                "status": "ok",
-                "operations": operations,
-                "count": len(operations)
-            }
-            
-        except Exception as e:
-            logger.error(f"Pull operations failed: {e}")
-            raise
+            try:
+                # Get undelivered, non-expired operations
+                cursor = conn.execute(
+                    """
+                    SELECT id, operation_data FROM pending_operations
+                    WHERE target_device_id = ? AND delivered_at IS NULL AND expires_at > ?
+                    ORDER BY created_at ASC
+                    LIMIT 1000
+                    """,
+                    (device_id, now)
+                )
+                
+                operations = []
+                op_ids = []
+                
+                for row in cursor:
+                    op_ids.append(row['id'])
+                    try:
+                        operations.append(json.loads(row['operation_data']))
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid operation data in queue: {row['id']}")
+                
+                # Mark as delivered
+                if op_ids:
+                    placeholders = ','.join(['?'] * len(op_ids))
+                    conn.execute(
+                        f"UPDATE pending_operations SET delivered_at = ? WHERE id IN ({placeholders})",
+                        [now] + op_ids
+                    )
+                
+                # Update last_seen
+                conn.execute(
+                    "UPDATE devices SET last_seen_at = ? WHERE device_id = ?",
+                    (now, device_id)
+                )
+                
+                conn.commit()
+                
+                return {
+                    "status": "ok",
+                    "operations": operations,
+                    "count": len(operations)
+                }
+                
+            except Exception as e:
+                logger.error(f"Pull operations failed: {e}")
+                raise
     
     def get_device_status(self, device_id: str) -> dict | None:
         """Get device status and stats."""
@@ -536,25 +638,18 @@ def create_sync_server(
     db_path: str = "sync_server.db",
     requests_per_minute: int = 60,
     require_auth: bool = False,
-    api_keys: list[str] = None
+    api_keys: list[str] = None,
+    p2p_mode: bool = False,
+    p2p_db_path: str | None = None
 ):
     """
     Create a production-ready Flask sync server.
-    
-    Args:
-        db_path: Path to SQLite database
-        requests_per_minute: Rate limit per device
-        require_auth: Whether to require API key authentication
-        api_keys: List of valid API keys
-        
-    Returns:
-        Flask app instance
     """
     if not HAS_FLASK:
         raise ImportError("Flask required: pip install flask")
     
     app = Flask(__name__)
-    server = SyncServer(db_path, requests_per_minute)
+    server = SyncServer(db_path, requests_per_minute, p2p_mode=p2p_mode, p2p_db_path=p2p_db_path)
     rate_limiter = server._rate_limiter
     valid_api_keys = set(api_keys or [])
     
@@ -616,10 +711,17 @@ def create_sync_server(
         """Exchange vector clocks."""
         try:
             data = request.json
-            result = server.handshake(
-                device_id=data.get("device_id"),
-                local_vc=data.get("vector_clock", {})
-            )
+            local_vc = data.get("vector_clock", {})
+            if server._p2p_mode:
+                result = server.handshake_p2p(
+                    device_id=data.get("device_id"),
+                    local_vc=local_vc
+                )
+            else:
+                result = server.handshake(
+                    device_id=data.get("device_id"),
+                    local_vc=local_vc
+                )
             return jsonify(result)
         except Exception as e:
             logger.error(f"Handshake error: {e}")
@@ -646,7 +748,10 @@ def create_sync_server(
         """Send pending operations to a device."""
         try:
             data = request.json
-            result = server.pull_operations(device_id=data.get("device_id"))
+            result = server.pull_operations(
+                device_id=data.get("device_id"),
+                since_vector_clock=data.get("since_vector_clock")
+            )
             return jsonify(result)
         except Exception as e:
             logger.error(f"Pull error: {e}")
@@ -703,10 +808,12 @@ def run_server(
     host: str = "0.0.0.0",
     port: int = 8080,
     db_path: str = "sync_server.db",
-    debug: bool = False
+    debug: bool = False,
+    p2p_mode: bool = False,
+    p2p_db_path: str | None = None
 ):
     """Run the production sync server."""
-    app = create_sync_server(db_path=db_path)
+    app = create_sync_server(db_path=db_path, p2p_mode=p2p_mode, p2p_db_path=p2p_db_path)
     print(f"Starting production sync server on http://{host}:{port}")
     print(f"Database: {db_path}")
     app.run(host=host, port=port, debug=debug, threaded=True)

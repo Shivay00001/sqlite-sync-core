@@ -121,25 +121,27 @@ class SyncEngine:
         """Generate a bundle for a peer."""
         return _generate_bundle(self.connection, peer_device_id, output_path)
 
-    def import_bundle(self, bundle_path: str) -> ImportResult:
-        """Import a bundle from a peer."""
+    def apply_batch(
+        self, 
+        operations: list[SyncOperation], 
+        source_device_id: bytes,
+        bundle_id: bytes | None = None,
+        content_hash: bytes | None = None
+    ) -> ImportResult:
+        """
+        Apply a batch of operations with full conflict detection and resolution.
+        Used by both import_bundle and stream-based sync.
+        """
         conn = self.connection
-        local_schema_version = get_schema_version(conn)
-        metadata = validate_bundle(bundle_path, local_schema_version)
+        import uuid
         
-        if is_bundle_already_imported(conn, metadata.content_hash):
-            return ImportResult(metadata.bundle_id, metadata.source_device_id, metadata.op_count, 0, 0, 0, True)
-        
-        bundle_conn = sqlite3.connect(bundle_path)
-        bundle_cursor = bundle_conn.execute("SELECT * FROM bundle_operations ORDER BY created_at ASC")
-        bundle_ops = [operation_from_row(row) for row in bundle_cursor.fetchall()]
-        bundle_conn.close()
-        
-        if not bundle_ops:
-            record_import(conn, metadata.bundle_id, metadata.content_hash, metadata.source_device_id, 0, 0, 0, 0)
-            return ImportResult(metadata.bundle_id, metadata.source_device_id, 0, 0, 0, 0, False)
-        
-        def do_import(conn: sqlite3.Connection) -> ImportResult:
+        # Default metadata for stream sync
+        if bundle_id is None:
+            bundle_id = uuid.uuid4().bytes
+        if content_hash is None:
+            content_hash = b"\x00" * 32
+            
+        def do_apply(conn: sqlite3.Connection) -> ImportResult:
             # Disable triggers for the session
             set_sync_disabled(conn, True)
             try:
@@ -147,12 +149,13 @@ class SyncEngine:
                 conflict_count = 0
                 duplicate_count = 0
                 
-                new_ops = [op for op in bundle_ops if not operation_exists(conn, op.op_id)]
-                duplicate_count = len(bundle_ops) - len(new_ops)
+                new_ops = [op for op in operations if not operation_exists(conn, op.op_id)]
+                duplicate_count = len(operations) - len(new_ops)
+                print(f"DEBUG: apply_batch: {len(operations)} received, {len(new_ops)} new, {duplicate_count} dups")
                 
                 if not new_ops:
-                    record_import(conn, metadata.bundle_id, metadata.content_hash, metadata.source_device_id, len(bundle_ops), 0, 0, duplicate_count)
-                    return ImportResult(metadata.bundle_id, metadata.source_device_id, len(bundle_ops), 0, 0, duplicate_count, False)
+                    record_import(conn, bundle_id, content_hash, source_device_id, len(operations), 0, 0, duplicate_count)
+                    return ImportResult(bundle_id, source_device_id, len(operations), 0, 0, duplicate_count, False)
                 
                 for op in sort_operations_deterministically(new_ops):
                     conflicting_op = detect_conflict(conn, op)
@@ -175,26 +178,53 @@ class SyncEngine:
                     else:
                         if is_dominated(conn, op):
                             insert_operation(conn, op)
-                            applied_count += 1
+                            # applied_count += 1 # Dominated ops are "applied" to log but not DB
                         else:
                             _apply_operation(conn, op)
                             insert_operation(conn, op)
                             applied_count += 1
                     
+                    # Update local HLC if op is newer
+                    if op.hlc:
+                        from sqlite_sync.hlc import HLC
+                        try:
+                            if self._clock: self._clock.update(HLC.unpack(op.hlc))
+                        except: pass
+
                     cvc = serialize_vector_clock(get_vector_clock(conn))
                     update_vector_clock(conn, parse_vector_clock(merge_vector_clocks(cvc, op.vector_clock)))
                 
                 now = int(time.time() * 1_000_000)
                 conn.execute("INSERT INTO sync_peer_state (peer_device_id, last_sent_vector_clock, last_sent_at, last_received_vector_clock, last_received_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(peer_device_id) DO UPDATE SET last_received_vector_clock = excluded.last_received_vector_clock, last_received_at = excluded.last_received_at",
-                            (metadata.source_device_id, EMPTY_VECTOR_CLOCK, 0, serialize_vector_clock(get_vector_clock(conn)), now))
+                            (source_device_id, EMPTY_VECTOR_CLOCK, 0, serialize_vector_clock(get_vector_clock(conn)), now))
                 
-                record_import(conn, metadata.bundle_id, metadata.content_hash, metadata.source_device_id, len(bundle_ops), applied_count, conflict_count, duplicate_count)
-                return ImportResult(metadata.bundle_id, metadata.source_device_id, len(bundle_ops), applied_count, conflict_count, duplicate_count, False)
+                record_import(conn, bundle_id, content_hash, source_device_id, len(operations), applied_count, conflict_count, duplicate_count)
+                return ImportResult(bundle_id, source_device_id, len(operations), applied_count, conflict_count, duplicate_count, False)
             finally:
                 # Restore to default state
                 set_sync_disabled(conn, False)
         
-        return execute_in_transaction(conn, do_import)
+        return execute_in_transaction(conn, do_apply)
+
+    def import_bundle(self, bundle_path: str) -> ImportResult:
+        """Import a bundle from a peer."""
+        conn = self.connection
+        local_schema_version = get_schema_version(conn)
+        metadata = validate_bundle(bundle_path, local_schema_version)
+        
+        if is_bundle_already_imported(conn, metadata.content_hash):
+            return ImportResult(metadata.bundle_id, metadata.source_device_id, metadata.op_count, 0, 0, 0, True)
+        
+        bundle_conn = sqlite3.connect(bundle_path)
+        bundle_cursor = bundle_conn.execute("SELECT * FROM bundle_operations ORDER BY created_at ASC")
+        bundle_ops = [operation_from_row(row) for row in bundle_cursor.fetchall()]
+        bundle_conn.close()
+        
+        if not bundle_ops:
+            record_import(conn, metadata.bundle_id, metadata.content_hash, metadata.source_device_id, 0, 0, 0, 0)
+            return ImportResult(metadata.bundle_id, metadata.source_device_id, 0, 0, 0, 0, False)
+        
+        return self.apply_batch(bundle_ops, metadata.source_device_id, metadata.bundle_id, metadata.content_hash)
 
     def migrate_schema(self, table_name: str, column_name: str, column_type: str, default_value: Any = None) -> Any:
         from sqlite_sync.schema_evolution import SchemaManager
