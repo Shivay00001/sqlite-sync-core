@@ -118,7 +118,7 @@ async def push_operations(request: PushRequest, engine: SyncEngine = Depends(get
                 new_values=bytes.fromhex(op_dict["new_values"]) if op_dict.get("new_values") else None,
                 schema_version=op_dict["schema_version"],
                 created_at=op_dict["created_at"],
-                hlc=op_dict.get("hlc"),
+                hlc=bytes.fromhex(op_dict["hlc"]) if op_dict.get("hlc") else None,
                 is_local=False,
                 applied_at=None
             )
@@ -166,7 +166,7 @@ async def pull_operations(request: PullRequest, engine: SyncEngine = Depends(get
                     "new_values": op.new_values.hex() if op.new_values else None,
                     "schema_version": op.schema_version,
                     "created_at": op.created_at,
-                    "hlc": op.hlc,
+                    "hlc": op.hlc.hex() if op.hlc else None,
                 })
                 
             return {

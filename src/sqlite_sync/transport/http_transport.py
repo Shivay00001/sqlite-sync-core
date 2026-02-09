@@ -139,7 +139,7 @@ class HTTPTransport(TransportAdapter):
             "new_values": op.new_values.hex() if op.new_values else None,
             "schema_version": op.schema_version,
             "created_at": op.created_at,
-            "hlc": op.hlc,
+            "hlc": op.hlc.hex() if op.hlc else None,
         }
     
     def _deserialize_op(self, data: dict) -> SyncOperation:
@@ -156,7 +156,7 @@ class HTTPTransport(TransportAdapter):
             new_values=bytes.fromhex(data["new_values"]) if data.get("new_values") else None,
             schema_version=data["schema_version"],
             created_at=data["created_at"],
-            hlc=data.get("hlc"),
+            hlc=bytes.fromhex(data["hlc"]) if data.get("hlc") else None,
             is_local=False,
             applied_at=None
         )
