@@ -335,6 +335,79 @@ def peers(
 
 
 # =============================================================================
+# Schema Migration Commands
+# =============================================================================
+
+@app.command()
+def migrate(
+    db_path: str = typer.Argument(..., help="Path to SQLite database"),
+    table: str = typer.Option(..., "--table", "-t", help="Table to migrate"),
+    add_column: Optional[str] = typer.Option(None, "--add-column", help="Column name to add"),
+    column_type: str = typer.Option("TEXT", "--type", help="Column type (TEXT, INTEGER, REAL, BLOB)"),
+    default: Optional[str] = typer.Option(None, "--default", "-d", help="Default value for new column"),
+    show_pending: bool = typer.Option(False, "--pending", help="Show pending migrations")
+):
+    """Manage schema migrations that sync across peers."""
+    from sqlite_sync.schema_evolution import SchemaManager
+    
+    engine = SyncEngine(db_path)
+    
+    with engine:
+        sm = SchemaManager(engine.connection)
+        
+        if show_pending:
+            # Show pending migrations
+            current_version = sm.get_current_version()
+            pending = sm.get_pending_migrations(0)
+            
+            if not pending:
+                console.print("[green]No pending migrations[/green]")
+                return
+            
+            table = Table(title=f"Pending Migrations (Current Version: {current_version})")
+            table.add_column("ID", style="dim")
+            table.add_column("Type", style="cyan")
+            table.add_column("Table", style="magenta")
+            table.add_column("Column", style="yellow")
+            table.add_column("Version", style="green")
+            
+            for m in pending:
+                table.add_row(
+                    m.migration_id.hex()[:12] + "...",
+                    m.migration_type.value,
+                    m.table_name,
+                    m.column_name or "-",
+                    f"{m.version_from} → {m.version_to}"
+                )
+            
+            console.print(table)
+            return
+        
+        if add_column:
+            # Add a new column
+            console.print(f"[bold]Adding column '{add_column}' to table '{table}'[/bold]")
+            
+            try:
+                migration = sm.add_column(
+                    table_name=table,
+                    column_name=add_column,
+                    column_type=column_type,
+                    default_value=default
+                )
+                
+                console.print(f"[green]✓ Migration created: {migration.migration_id.hex()[:12]}...[/green]")
+                console.print(f"  Type: {migration.migration_type.value}")
+                console.print(f"  Version: {migration.version_from} → {migration.version_to}")
+                console.print(f"\n[dim]This migration will sync to other peers automatically.[/dim]")
+                
+            except Exception as e:
+                console.print(f"[red]Migration failed: {e}[/red]")
+                raise typer.Exit(1)
+        else:
+            console.print("[yellow]No migration action specified. Use --add-column or --pending[/yellow]")
+
+
+# =============================================================================
 # CLI Consistency - Aliases
 # =============================================================================
 
