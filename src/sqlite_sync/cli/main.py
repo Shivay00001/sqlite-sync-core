@@ -122,12 +122,51 @@ def status(db_path: str = typer.Argument(..., help="Path to SQLite database")):
 @app.command()
 def resolve(
     db_path: str = typer.Argument(..., help="Path to SQLite database"),
-    conflict_id: str = typer.Option(None, "--id", help="Conflict ID to resolve"),
-    resolution: str = typer.Option("local", help="Resolution strategy (local/remote)")
+    conflict_id: Optional[str] = typer.Option(None, "--id", help="Conflict ID to resolve"),
+    resolution: Optional[str] = typer.Option(None, "--strategy", help="Resolution strategy (local/remote)")
 ):
-    """Resolve conflicts."""
-    console.print("[yellow]Manual resolution not yet fully implemented via CLI[/yellow]")
-    # TODO: Implement manual resolution logic
+    """Resolve conflicts manually."""
+    engine = SyncEngine(db_path)
+    
+    with engine:
+        conflicts = engine.get_unresolved_conflicts()
+        
+        if not conflicts:
+            console.print("[green]No unresolved conflicts found.[/green]")
+            return
+
+        if not conflict_id:
+            # Show list if no ID provided
+            status(db_path)
+            conflict_id = typer.prompt("Enter conflict ID (or short hex) to resolve")
+        
+        # Find the conflict
+        target = None
+        for c in conflicts:
+            if c.conflict_id.hex().startswith(conflict_id):
+                target = c
+                break
+        
+        if not target:
+            console.print(f"[red]Conflict {conflict_id} not found.[/red]")
+            raise typer.Exit(1)
+            
+        cid_hex = target.conflict_id.hex()
+        
+        if not resolution:
+            console.print(f"\nResolving conflict in table [bold]{target.table_name}[/bold]")
+            console.print(f"Conflict ID: {cid_hex}")
+            console.print("1) Keep Local version")
+            console.print("2) Accept Remote version")
+            choice = typer.prompt("Choose resolution", type=int)
+            resolution = "local" if choice == 1 else "remote"
+            
+        try:
+            engine.resolve_conflict(cid_hex, resolution)
+            console.print(f"[green]Conflict resolved using {resolution} strategy.[/green]")
+        except Exception as e:
+            console.print(f"[red]Resolution failed: {e}[/red]")
+            raise typer.Exit(1)
 
 @app.command()
 def snapshot(

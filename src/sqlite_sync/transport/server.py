@@ -1,13 +1,14 @@
 import os
 import logging
+import time
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Depends, Header, Request, status
-from pydantic import BaseModel
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from sqlite_sync.engine import SyncEngine
 from sqlite_sync.log.operations import SyncOperation
-from sqlite_sync.security import SecurityManager
+from sqlite_sync.security import SecurityManager, SignedBundle
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -30,23 +31,99 @@ class PullRequest(BaseModel):
     since_vector_clock: Dict[str, int]
     limit: int = 1000
 
-# Global state for the engine path, to be set by CLI or env var
+# Global configuration
 DB_PATH = os.environ.get("SQLITE_SYNC_DB_PATH", "sync_server.db")
+NONCE_DB_PATH = os.environ.get("SQLITE_SYNC_NONCE_DB_PATH", "sync_nonces.db")
+SIGNING_SECRET = os.environ.get("SQLITE_SYNC_SIGNING_SECRET", "change-me-in-production")
+SERVER_DEVICE_ID = os.environ.get("SQLITE_SYNC_SERVER_ID", "server-001").encode()
 
 app = FastAPI(title="SQLite Sync Server")
+
+# Initialize Security Manager
+security_manager = SecurityManager(
+    device_id=SERVER_DEVICE_ID,
+    signing_key=SIGNING_SECRET.encode(),
+    nonce_db_path=NONCE_DB_PATH
+)
 
 def get_engine() -> SyncEngine:
     if not DB_PATH:
         raise HTTPException(status_code=500, detail="Database path not configured")
     try:
         engine = SyncEngine(DB_PATH)
-        # We need to act as a context manager to ensure connections are closed if needed,
-        # but for per-request isolation, we can rely on garbage collection or explicit close in a try/finally block
-        # in the endpoint. However, SyncEngine creates connection on first access.
         return engine
     except Exception as e:
         logger.error(f"Failed to initialize engine: {e}")
         raise HTTPException(status_code=500, detail="Internal Sync Error")
+
+async def verify_request(
+    request: Request,
+    x_sync_device_id: str = Header(..., alias="X-Sync-Device-Id"),
+    x_sync_timestamp: str = Header(..., alias="X-Sync-Timestamp"),
+    x_sync_nonce: str = Header(..., alias="X-Sync-Nonce"),
+    x_sync_signature: str = Header(..., alias="X-Sync-Signature"),
+):
+    """
+    Verify request signature and replay protection.
+    
+    All state-changing endpoints must use this dependency.
+    """
+    try:
+        # 1. Read raw body
+        body_bytes = await request.body()
+        
+        # 2. Reconstruct SignedBundle
+        # We assume the signature type is HMAC for now as per minimal config
+        bundle = SignedBundle(
+            bundle_data=body_bytes,
+            signature=bytes.fromhex(x_sync_signature),
+            device_id=bytes.fromhex(x_sync_device_id),
+            timestamp=int(x_sync_timestamp),
+            nonce=bytes.fromhex(x_sync_nonce),
+            signature_type="hmac"
+        )
+        
+        # 3. Verify
+        # We reuse the global SIGNING_SECRET for all devices (shared secret model)
+        # In a more advanced setup, we'd lookup per-device keys.
+        if not security_manager.verify_signature(bundle):
+            logger.warning(f"Invalid signature from {x_sync_device_id}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid signature or replay detected"
+            )
+            
+        return True
+        
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid header format"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Verification error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Security verification failed"
+        )
+
+# Global Exception Handlers
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled exception")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error"},
+    )
 
 @app.on_event("startup")
 async def startup_event():
@@ -58,11 +135,15 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Startup initialization failed: {e}")
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    security_manager.close()
+
 @app.get("/sync/health")
 async def health_check():
     return {"status": "ok", "service": "sqlite-sync"}
 
-@app.post("/sync/handshake")
+@app.post("/sync/handshake", dependencies=[Depends(verify_request)])
 async def handshake(request: HandshakeRequest, engine: SyncEngine = Depends(get_engine)):
     """Exchange vector clocks and device info."""
     try:
@@ -89,23 +170,15 @@ async def handshake(request: HandshakeRequest, engine: SyncEngine = Depends(get_
         logger.exception("Handshake failed")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/sync/push")
+@app.post("/sync/push", dependencies=[Depends(verify_request)])
 async def push_operations(request: PushRequest, engine: SyncEngine = Depends(get_engine)):
     """Receive operations from a client."""
     try:
         source_device_id = bytes.fromhex(request.device_id)
         
         # Deserialize operations
-        # The engine's apply_batch expects SyncOperation objects
         ops = []
         for op_dict in request.operations:
-            # We need to use the deserialize logic from http_transport or similar
-            # Since that logic was in the client, we need a shared util or reimplement it here.
-            # Ideally, `SyncOperation` has a `from_dict` or similar, or we reuse `http_transport._deserialize_op`.
-            # For now I will manually map it to avoid circular dependency or code duplication if I can't find a shared place.
-            # Actually, `http_transport` had `_deserialize_op`. I should move that to `SyncOperation` or a serializer.
-             
-            # Mapping assuming dict structure matches `http_transport._serialize_op`
             op = SyncOperation(
                 op_id=bytes.fromhex(op_dict["op_id"]),
                 device_id=bytes.fromhex(op_dict["device_id"]),
@@ -125,8 +198,6 @@ async def push_operations(request: PushRequest, engine: SyncEngine = Depends(get
             ops.append(op)
 
         with engine:
-            # TODO: Verify signature if security enabled
-            
             result = engine.apply_batch(
                 operations=ops,
                 source_device_id=source_device_id,
@@ -143,7 +214,7 @@ async def push_operations(request: PushRequest, engine: SyncEngine = Depends(get
         logger.exception("Push failed")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/sync/pull")
+@app.post("/sync/pull", dependencies=[Depends(verify_request)])
 async def pull_operations(request: PullRequest, engine: SyncEngine = Depends(get_engine)):
     """Send operations to a client."""
     try:

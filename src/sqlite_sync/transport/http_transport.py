@@ -7,12 +7,15 @@ Uses REST API (FastAPI) for synchronization between devices.
 import json
 import asyncio
 import logging
+import time
+import os
 from dataclasses import dataclass
 from typing import Any, List, Dict, Optional
 import httpx
 
 from sqlite_sync.transport.base import TransportAdapter, SyncResult
 from sqlite_sync.log.operations import SyncOperation
+from sqlite_sync.security import SecurityManager
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +44,10 @@ class HTTPTransport(TransportAdapter):
         self._connected = False
         self._remote_vc: dict[str, int] = {}
         self._client = httpx.AsyncClient(timeout=timeout)
+        
+        # Initialize security manager for signing
+        signing_key = auth_token.encode() if auth_token else None
+        self._security = SecurityManager(device_id, signing_key=signing_key)
     
     @property
     def name(self) -> str:
@@ -49,6 +56,7 @@ class HTTPTransport(TransportAdapter):
     async def connect(self) -> bool:
         """Test connection with a handshake request."""
         try:
+            # We don't sign health check, it's public
             response = await self._client.get(f"{self._base_url}/sync/health")
             response.raise_for_status()
             data = response.json()
@@ -69,16 +77,18 @@ class HTTPTransport(TransportAdapter):
     async def exchange_vector_clock(self, local_vc: dict[str, int], schema_version: int = 0) -> dict[str, int]:
         """Exchange vector clocks to determine sync delta."""
         try:
-            response = await self._client.post(
+            payload = {
+                "device_id": self._device_id.hex(),
+                "vector_clock": local_vc,
+                "schema_version": schema_version
+            }
+            
+            data = await self._signed_request(
+                "POST", 
                 f"{self._base_url}/sync/handshake",
-                json={
-                    "device_id": self._device_id.hex(),
-                    "vector_clock": local_vc,
-                    "schema_version": schema_version
-                }
+                payload
             )
-            response.raise_for_status()
-            data = response.json()
+            
             self._remote_vc = data.get("vector_clock", {})
             return self._remote_vc
         except Exception as e:
@@ -92,15 +102,17 @@ class HTTPTransport(TransportAdapter):
             
         serialized = [self._serialize_op(op) for op in operations]
         try:
-            response = await self._client.post(
+            payload = {
+                "device_id": self._device_id.hex(),
+                "operations": serialized
+            }
+            
+            data = await self._signed_request(
+                "POST", 
                 f"{self._base_url}/sync/push",
-                json={
-                    "device_id": self._device_id.hex(),
-                    "operations": serialized
-                }
+                payload
             )
-            response.raise_for_status()
-            data = response.json()
+            
             return data.get("accepted_count", 0)
         except Exception as e:
             logger.error(f"Push failed: {e}")
@@ -109,21 +121,53 @@ class HTTPTransport(TransportAdapter):
     async def receive_operations(self) -> list[SyncOperation]:
         """Receive new operations from remote."""
         try:
-            response = await self._client.post(
+            payload = {
+                "device_id": self._device_id.hex(),
+                "since_vector_clock": self._remote_vc
+            }
+            
+            data = await self._signed_request(
+                "POST", 
                 f"{self._base_url}/sync/pull",
-                json={
-                    "device_id": self._device_id.hex(),
-                    "since_vector_clock": self._remote_vc
-                }
+                payload
             )
-            response.raise_for_status()
-            data = response.json()
             
             ops_data = data.get("operations", [])
             return [self._deserialize_op(op) for op in ops_data]
         except Exception as e:
             logger.error(f"Pull failed: {e}")
             raise
+            
+    async def _signed_request(self, method: str, url: str, json_data: dict) -> dict:
+        """Helper to send signed requests."""
+        # 1. Serialize to bytes ensuring determinism not strictly required for JSON 
+        # but required for signature matching.
+        # We use simple json.dumps. Server must verify partial raw body or same serialization.
+        # Ideally we sign the BYTES we send.
+        body_bytes = json.dumps(json_data).encode("utf-8")
+        
+        # 2. Sign
+        # We treat the body as a "bundle" only for signing purposes
+        signed = self._security.sign_bundle(body_bytes)
+        
+        # 3. Construct headers
+        headers = {
+            "Content-Type": "application/json",
+            "X-Sync-Device-Id": self._device_id.hex(),
+            "X-Sync-Timestamp": str(signed.timestamp),
+            "X-Sync-Nonce": signed.nonce.hex(),
+            "X-Sync-Signature": signed.signature.hex(),
+        }
+        
+        # 4. Send
+        response = await self._client.request(
+            method,
+            url,
+            content=body_bytes,
+            headers=headers
+        )
+        response.raise_for_status()
+        return response.json()
     
     def _serialize_op(self, op: SyncOperation) -> dict:
         """Serialize operation for JSON transport."""

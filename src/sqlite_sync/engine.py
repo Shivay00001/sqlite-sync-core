@@ -268,3 +268,48 @@ class SyncEngine:
     
     def get_vector_clock(self) -> dict[str, int]:
         return get_vector_clock(self.connection)
+
+    def resolve_conflict(self, conflict_id: str, resolution: str) -> None:
+        """
+        Manually resolve a conflict.
+        
+        Args:
+            conflict_id: Hex-encoded conflict ID
+            resolution: 'local' or 'remote'
+        """
+        if resolution not in ("local", "remote"):
+            raise ValueError("Resolution must be 'local' or 'remote'")
+            
+        cid_bytes = bytes.fromhex(conflict_id)
+        from sqlite_sync.import_apply.conflict import get_conflict_by_id, mark_conflict_resolved
+        from sqlite_sync.log.operations import get_operation_by_id
+        from sqlite_sync.import_apply.apply import apply_operation_raw
+        
+        conn = self.connection
+        with execute_in_transaction(conn, lambda c: None): # Check transaction
+            conflict = get_conflict_by_id(conn, cid_bytes)
+            if not conflict:
+                raise ValueError(f"Conflict {conflict_id} not found")
+                
+            if resolution == "local":
+                # Local wins, DB is already in local state (remote was not applied)
+                # Just mark resolved
+                mark_conflict_resolved(conn, cid_bytes, conflict.local_op_id)
+                
+            else: # remote
+                # Remote wins, apply remote op
+                remote_op = get_operation_by_id(conn, conflict.remote_op_id)
+                if not remote_op:
+                    raise ValueError("Remote operation not found")
+                
+                from sqlite_sync.utils.msgpack_codec import unpack_dict
+                values = unpack_dict(remote_op.new_values) if remote_op.new_values else {}
+                apply_operation_raw(conn, remote_op.table_name, remote_op.row_pk, values)
+                mark_conflict_resolved(conn, cid_bytes, conflict.remote_op_id)
+                
+                # Update clock if possible
+                if self._clock and remote_op.hlc:
+                    from sqlite_sync.hlc import HLC
+                    try:
+                        self._clock.update(HLC.unpack(remote_op.hlc))
+                    except: pass

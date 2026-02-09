@@ -67,8 +67,9 @@ class LWWResolver:
     Supports field-level merging if enabled.
     """
     
-    def __init__(self, field_level: bool = True):
+    def __init__(self, field_level: bool = True, auto_resolve: bool = True):
         self.field_level = field_level
+        self._auto_resolve = auto_resolve
         
     @property
     def name(self) -> str:
@@ -76,7 +77,7 @@ class LWWResolver:
 
     @property
     def auto_resolve(self) -> bool:
-        return True
+        return self._auto_resolve
 
     def resolve(
         self, 
