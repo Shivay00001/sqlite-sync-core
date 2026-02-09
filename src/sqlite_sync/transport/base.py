@@ -61,12 +61,14 @@ class TransportAdapter(ABC):
         pass
     
     @abstractmethod
-    async def exchange_vector_clock(self, local_vc: dict[str, int]) -> dict[str, int]:
+    async def exchange_vector_clock(self, local_vc: dict[str, int], schema_version: int = 0) -> dict[str, int]:
         """
         Exchange vector clocks with remote to determine what to sync.
+         Also verifies schema compatibility.
         
         Args:
             local_vc: Local vector clock
+            schema_version: Local schema version
             
         Returns:
             Remote's vector clock

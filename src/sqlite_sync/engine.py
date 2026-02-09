@@ -66,16 +66,27 @@ class SyncEngine:
     Core engine for SQLite synchronization.
     """
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, conflict_resolver: Any = None):
         self._db_path = db_path
         self._conn = None
         self._device_id = None
         self._clock = None
+        
+        # Default to LWW if not provided
+        if conflict_resolver is None:
+            from sqlite_sync.resolution.strategies import LWWResolver
+            self._resolver = LWWResolver()
+        else:
+            self._resolver = conflict_resolver
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def close(self):
+        """Close the database connection."""
         if self._conn:
             self._conn.close()
             self._conn = None
@@ -151,7 +162,7 @@ class SyncEngine:
                 
                 new_ops = [op for op in operations if not operation_exists(conn, op.op_id)]
                 duplicate_count = len(operations) - len(new_ops)
-                print(f"DEBUG: apply_batch: {len(operations)} received, {len(new_ops)} new, {duplicate_count} dups")
+                # print(f"DEBUG: apply_batch: {len(operations)} received, {len(new_ops)} new, {duplicate_count} dups")
                 
                 if not new_ops:
                     record_import(conn, bundle_id, content_hash, source_device_id, len(operations), 0, 0, duplicate_count)
@@ -161,19 +172,22 @@ class SyncEngine:
                     conflicting_op = detect_conflict(conn, op)
                     
                     if conflicting_op is not None:
-                        from sqlite_sync.resolution.lww_merge import get_merged_state
-                        merged_values = get_merged_state(conflicting_op, op)
+                        # Use configured resolver
+                        merged_values = self._resolver.resolve(conflicting_op, op)
                         
                         insert_operation(conn, op)
                         record_conflict(conn, op.table_name, op.row_pk, conflicting_op.op_id, op.op_id)
-                        apply_operation_raw(conn, op.table_name, op.row_pk, merged_values)
                         
-                        conn.execute("UPDATE sync_conflicts SET resolved_at = ?, resolution_strategy = 'LWW_FIELD' WHERE local_op_id = ? AND remote_op_id = ?",
-                                    (int(time.time() * 1_000_000), conflicting_op.op_id, op.op_id))
+                        if getattr(self._resolver, "auto_resolve", True):
+                            apply_operation_raw(conn, op.table_name, op.row_pk, merged_values)
+                            
+                            conn.execute("UPDATE sync_conflicts SET resolved_at = ?, resolution_strategy = ? WHERE local_op_id = ? AND remote_op_id = ?",
+                                        (int(time.time() * 1_000_000), self._resolver.name, conflicting_op.op_id, op.op_id))
+                            
+                            from sqlite_sync.hlc import HLC
+                            if self._clock: self._clock.update(HLC.unpack(op.hlc))
+                            applied_count += 1
                         
-                        from sqlite_sync.hlc import HLC
-                        if self._clock: self._clock.update(HLC.unpack(op.hlc))
-                        applied_count += 1
                         conflict_count += 1
                     else:
                         if is_dominated(conn, op):
@@ -233,6 +247,18 @@ class SyncEngine:
     def compact_log(self, max_ops: int = 10000) -> Any:
         from sqlite_sync.log.compaction import LogCompactor
         return LogCompactor(self.connection).compact_log(max_ops=max_ops)
+
+    def create_snapshot(self) -> Any:
+        from sqlite_sync.log.compaction import LogCompactor
+        return LogCompactor(self.connection).create_snapshot()
+
+    def get_schema_version(self) -> int:
+        from sqlite_sync.db.migrations import get_schema_version
+        return get_schema_version(self.connection)
+
+    def check_compatibility(self, remote_version: int) -> bool:
+        from sqlite_sync.schema_evolution import SchemaManager
+        return SchemaManager(self.connection).check_compatibility(remote_version)
 
     def get_unresolved_conflicts(self) -> list[SyncConflict]:
         return _get_unresolved_conflicts(self.connection)

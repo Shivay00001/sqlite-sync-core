@@ -1,20 +1,18 @@
 """
 http_transport.py - HTTP-based sync transport.
 
-Uses REST API for synchronization between devices.
+Uses REST API (FastAPI) for synchronization between devices.
 """
 
 import json
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any
-from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
+from typing import Any, List, Dict, Optional
+import httpx
 
 from sqlite_sync.transport.base import TransportAdapter, SyncResult
 from sqlite_sync.log.operations import SyncOperation
-from sqlite_sync.utils.msgpack_codec import pack_value, unpack_value
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +24,7 @@ class HTTPTransport(TransportAdapter):
     Endpoints expected on server:
     - POST /sync/handshake - Exchange vector clocks
     - POST /sync/push - Send operations
-    - GET /sync/pull?since=<vc> - Receive operations
+    - POST /sync/pull - Receive operations
     """
     
     def __init__(
@@ -42,6 +40,7 @@ class HTTPTransport(TransportAdapter):
         self._timeout = timeout
         self._connected = False
         self._remote_vc: dict[str, int] = {}
+        self._client = httpx.AsyncClient(timeout=timeout)
     
     @property
     def name(self) -> str:
@@ -50,8 +49,10 @@ class HTTPTransport(TransportAdapter):
     async def connect(self) -> bool:
         """Test connection with a handshake request."""
         try:
-            response = await self._request("GET", "/sync/health")
-            self._connected = response.get("status") == "ok"
+            response = await self._client.get(f"{self._base_url}/sync/health")
+            response.raise_for_status()
+            data = response.json()
+            self._connected = data.get("status") == "ok"
             return self._connected
         except Exception as e:
             logger.error(f"HTTP connect failed: {e}")
@@ -60,18 +61,29 @@ class HTTPTransport(TransportAdapter):
     
     async def disconnect(self) -> None:
         self._connected = False
+        await self._client.aclose()
     
     def is_connected(self) -> bool:
         return self._connected
     
-    async def exchange_vector_clock(self, local_vc: dict[str, int]) -> dict[str, int]:
+    async def exchange_vector_clock(self, local_vc: dict[str, int], schema_version: int = 0) -> dict[str, int]:
         """Exchange vector clocks to determine sync delta."""
-        response = await self._request("POST", "/sync/handshake", {
-            "device_id": self._device_id.hex(),
-            "vector_clock": local_vc
-        })
-        self._remote_vc = response.get("vector_clock", {})
-        return self._remote_vc
+        try:
+            response = await self._client.post(
+                f"{self._base_url}/sync/handshake",
+                json={
+                    "device_id": self._device_id.hex(),
+                    "vector_clock": local_vc,
+                    "schema_version": schema_version
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            self._remote_vc = data.get("vector_clock", {})
+            return self._remote_vc
+        except Exception as e:
+            logger.error(f"Handshake failed: {e}")
+            raise
     
     async def send_operations(self, operations: list[SyncOperation]) -> int:
         """Send operations to remote server."""
@@ -79,42 +91,38 @@ class HTTPTransport(TransportAdapter):
             return 0
             
         serialized = [self._serialize_op(op) for op in operations]
-        response = await self._request("POST", "/sync/push", {
-            "device_id": self._device_id.hex(),
-            "operations": serialized
-        })
-        return response.get("accepted_count", 0)
+        try:
+            response = await self._client.post(
+                f"{self._base_url}/sync/push",
+                json={
+                    "device_id": self._device_id.hex(),
+                    "operations": serialized
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("accepted_count", 0)
+        except Exception as e:
+            logger.error(f"Push failed: {e}")
+            raise
     
     async def receive_operations(self) -> list[SyncOperation]:
         """Receive new operations from remote."""
-        response = await self._request("POST", "/sync/pull", {
-            "device_id": self._device_id.hex(),
-            "since_vector_clock": self._remote_vc
-        })
-        
-        ops_data = response.get("operations", [])
-        return [self._deserialize_op(op) for op in ops_data]
-    
-    async def _request(self, method: str, path: str, data: dict | None = None) -> dict:
-        """Make HTTP request."""
-        url = f"{self._base_url}{path}"
-        headers = {"Content-Type": "application/json"}
-        
-        if self._auth_token:
-            headers["Authorization"] = f"Bearer {self._auth_token}"
-        
-        body = json.dumps(data).encode() if data else None
-        req = Request(url, data=body, headers=headers, method=method)
-        
         try:
-            with urlopen(req, timeout=self._timeout) as response:
-                return json.loads(response.read().decode())
-        except HTTPError as e:
-            error_body = e.read().decode()
-            logger.error(f"HTTP error {e.code}: {e.reason}\nBody: {error_body}")
-            raise
-        except URLError as e:
-            logger.error(f"URL error: {e}")
+            response = await self._client.post(
+                f"{self._base_url}/sync/pull",
+                json={
+                    "device_id": self._device_id.hex(),
+                    "since_vector_clock": self._remote_vc
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            ops_data = data.get("operations", [])
+            return [self._deserialize_op(op) for op in ops_data]
+        except Exception as e:
+            logger.error(f"Pull failed: {e}")
             raise
     
     def _serialize_op(self, op: SyncOperation) -> dict:
@@ -139,13 +147,13 @@ class HTTPTransport(TransportAdapter):
         return SyncOperation(
             op_id=bytes.fromhex(data["op_id"]),
             device_id=bytes.fromhex(data["device_id"]),
-            parent_op_id=bytes.fromhex(data["parent_op_id"]) if data["parent_op_id"] else None,
+            parent_op_id=bytes.fromhex(data["parent_op_id"]) if data.get("parent_op_id") else None,
             vector_clock=data["vector_clock"],
             table_name=data["table_name"],
             op_type=data["op_type"],
             row_pk=bytes.fromhex(data["row_pk"]),
-            old_values=bytes.fromhex(data["old_values"]) if data["old_values"] else None,
-            new_values=bytes.fromhex(data["new_values"]) if data["new_values"] else None,
+            old_values=bytes.fromhex(data["old_values"]) if data.get("old_values") else None,
+            new_values=bytes.fromhex(data["new_values"]) if data.get("new_values") else None,
             schema_version=data["schema_version"],
             created_at=data["created_at"],
             hlc=data.get("hlc"),

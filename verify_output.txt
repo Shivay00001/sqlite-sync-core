@@ -1,0 +1,10 @@
+Starting Transport Verification...
+Traceback (most recent call last):
+  File "C:\info\sqlite_sync_core\verify_transport.py", line 88, in <module>
+    run_verification()
+  File "C:\info\sqlite_sync_core\verify_transport.py", line 30, in run_verification
+    client = TestClient(app)
+             ^^^^^^^^^^^^^^^
+  File "C:\Users\shiva\AppData\Roaming\Python\Python312\site-packages\starlette\testclient.py", line 399, in __init__
+    super().__init__(
+TypeError: Client.__init__() got an unexpected keyword argument 'app'

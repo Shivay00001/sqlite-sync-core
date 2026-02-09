@@ -33,10 +33,13 @@ class TestConflictDetection:
             db_a_path = os.path.join(tmpdir, "device_a.db")
             db_b_path = os.path.join(tmpdir, "device_b.db")
             
+            from sqlite_sync.resolution.strategies import NoOpResolver
+            no_op = NoOpResolver()
+            
             engine_a = SyncEngine(db_a_path)
             engine_a.initialize()
             
-            engine_b = SyncEngine(db_b_path)
+            engine_b = SyncEngine(db_b_path, conflict_resolver=no_op)
             engine_b.initialize()
             
             # Create same table on both
@@ -99,10 +102,13 @@ class TestConflictDetection:
             db_a_path = os.path.join(tmpdir, "device_a.db")
             db_b_path = os.path.join(tmpdir, "device_b.db")
             
+            from sqlite_sync.resolution.strategies import NoOpResolver
+            no_op = NoOpResolver()
+            
             engine_a = SyncEngine(db_a_path)
             engine_a.initialize()
             
-            engine_b = SyncEngine(db_b_path)
+            engine_b = SyncEngine(db_b_path, conflict_resolver=no_op)
             engine_b.initialize()
             
             for engine in [engine_a, engine_b]:
