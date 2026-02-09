@@ -414,12 +414,84 @@ def migrate(
 @app.command()
 def start(
     db_path: str = typer.Argument(..., help="Path to SQLite database"),
-    host: str = typer.Option("0.0.0.0", help="Host to bind to"),
-    port: int = typer.Option(8000, help="Port to bind to"),
-    reload: bool = typer.Option(False, help="Enable auto-reload")
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="Device name for network discovery"),
+    tables: Optional[list[str]] = typer.Option(None, "--table", "-t", help="Tables to enable sync for"),
+    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Host to bind to"),
+    port: int = typer.Option(8000, "--port", "-p", help="Port to bind to"),
+    auto_discover: bool = typer.Option(True, "--auto-discover/--no-discover", help="Enable P2P discovery"),
+    sync_interval: float = typer.Option(30.0, "--interval", "-i", help="Sync interval in seconds"),
+    daemon: bool = typer.Option(False, "--daemon", "-d", help="Run as background daemon")
 ):
-    """Start the sync server (alias for 'serve')."""
-    serve(db_path=db_path, host=host, port=port, reload=reload)
+    """
+    Start a full sync node with server, discovery, and background sync.
+    
+    This is the turn-key command that starts everything:
+    - HTTP/WebSocket sync server
+    - P2P peer discovery (if enabled)
+    - Background sync scheduler
+    - Auto-sync for specified tables
+    
+    Example:
+        sqlite-sync start app.db --name Device-A --table tasks --table users
+    """
+    import asyncio
+    import socket
+    
+    # Generate device name if not provided
+    device_name = name or f"{socket.gethostname()}-{port}"
+    
+    console.print(f"[bold green]Starting Sync Node: {device_name}[/bold green]")
+    console.print(f"Database: {db_path}")
+    console.print(f"Server: http://{host}:{port}")
+    console.print(f"Auto-discovery: {'Enabled' if auto_discover else 'Disabled'}")
+    console.print(f"Sync interval: {sync_interval}s")
+    
+    try:
+        from sqlite_sync.ext.node import SyncNode
+        
+        # Create the full sync node
+        node = SyncNode(
+            db_path=db_path,
+            device_name=device_name,
+            port=port,
+            enable_discovery=auto_discover,
+            sync_interval=sync_interval
+        )
+        
+        # Enable sync for specified tables
+        if tables:
+            with node.engine:
+                for table in tables:
+                    node.enable_sync_for_table(table)
+                    console.print(f"  [cyan]✓ Sync enabled for table: {table}[/cyan]")
+        
+        console.print(f"\n[green]Node ready! Device ID: {node.device_id.hex()[:16]}...[/green]")
+        console.print("[dim]Press Ctrl+C to stop[/dim]\n")
+        
+        # Run the node
+        async def run_node():
+            await node.start()
+            
+            # Keep running until interrupted
+            try:
+                while True:
+                    await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                pass
+            finally:
+                await node.stop()
+        
+        try:
+            asyncio.run(run_node())
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Shutting down...[/yellow]")
+            asyncio.run(node.stop())
+            console.print("[green]Node stopped.[/green]")
+            
+    except ImportError as e:
+        # Fallback to simple serve if SyncNode dependencies are missing
+        console.print(f"[yellow]SyncNode not available ({e}), falling back to simple server[/yellow]")
+        serve(db_path=db_path, host=host, port=port, reload=False)
 
 
 def main():

@@ -15,7 +15,7 @@ from sqlite_sync.errors import (
 )
 
 # Core
-__version__ = "0.5.1"
+__version__ = "0.7.0"
 __all__ = [
     # Core
     "SyncEngine",
