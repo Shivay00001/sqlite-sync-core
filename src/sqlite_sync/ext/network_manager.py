@@ -28,11 +28,13 @@ class MultiPeerSyncManager:
         self,
         engine: SyncEngine,
         discovery: UDPDiscovery,
-        config: Optional[SyncLoopConfig] = None
+        config: Optional[SyncLoopConfig] = None,
+        auth_token: Optional[str] = None
     ):
         self._engine = engine
         self._discovery = discovery
         self._config = config or SyncLoopConfig()
+        self._auth_token = auth_token
         
         self._active_loops: Dict[str, SyncLoop] = {} # device_id -> SyncLoop
         self._lock = asyncio.Lock()
@@ -83,7 +85,8 @@ class MultiPeerSyncManager:
             # Create transport for this peer
             transport = HTTPTransport(
                 base_url=peer.url,
-                device_id=self._engine.device_id
+                device_id=self._engine.device_id,
+                auth_token=self._auth_token
             )
             
             # Create and start loop

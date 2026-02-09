@@ -37,6 +37,7 @@ class SyncNode:
         port: int = 8080,
         enable_discovery: bool = True,
         sync_interval: float = 30.0,
+        auth_token: Optional[str] = None,
         conflict_resolver: Optional[object] = None
     ):
         self.engine = SyncEngine(db_path)
@@ -46,6 +47,7 @@ class SyncNode:
         self.port = port
         self.enable_discovery = enable_discovery
         self.sync_interval = sync_interval
+        self.auth_token = auth_token
         
         self.discovery = None
         self.peer_manager = None
@@ -61,7 +63,8 @@ class SyncNode:
         self.sync_manager = MultiPeerSyncManager(
             engine=self.engine,
             discovery=self.discovery,
-            config=SyncLoopConfig(interval_seconds=sync_interval)
+            config=SyncLoopConfig(interval_seconds=sync_interval),
+            auth_token=auth_token
         )
         
         self._server_thread: Optional[threading.Thread] = None

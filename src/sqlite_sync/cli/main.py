@@ -420,7 +420,8 @@ def start(
     port: int = typer.Option(8000, "--port", "-p", help="Port to bind to"),
     auto_discover: bool = typer.Option(True, "--auto-discover/--no-discover", help="Enable P2P discovery"),
     sync_interval: float = typer.Option(30.0, "--interval", "-i", help="Sync interval in seconds"),
-    daemon: bool = typer.Option(False, "--daemon", "-d", help="Run as background daemon")
+    daemon: bool = typer.Option(False, "--daemon", "-d", help="Run as background daemon"),
+    secret: Optional[str] = typer.Option(None, "--secret", "-s", help="Shared secret for auth (env: SQLITE_SYNC_SIGNING_SECRET)")
 ):
     """
     Start a full sync node with server, discovery, and background sync.
@@ -436,6 +437,13 @@ def start(
     """
     import asyncio
     import socket
+    
+    # Set environment variable for secret if provided
+    if secret:
+        os.environ["SQLITE_SYNC_SIGNING_SECRET"] = secret
+    else:
+        # Fallback to existing env var or default
+        secret = os.environ.get("SQLITE_SYNC_SIGNING_SECRET", "change-me-in-production")
     
     # Generate device name if not provided
     device_name = name or f"{socket.gethostname()}-{port}"
@@ -455,7 +463,8 @@ def start(
             device_name=device_name,
             port=port,
             enable_discovery=auto_discover,
-            sync_interval=sync_interval
+            sync_interval=sync_interval,
+            auth_token=secret
         )
         
         # Enable sync for specified tables

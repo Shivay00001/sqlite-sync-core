@@ -73,10 +73,14 @@ class WebSocketTransport(TransportAdapter):
             self._connected = True
             
             # Send handshake
-            await self._send_message({
+            handshake_msg = {
                 "type": "handshake",
                 "device_id": self._device_id.hex()
-            })
+            }
+            if self._auth_token:
+                handshake_msg["auth_token"] = self._auth_token
+            
+            await self._send_message(handshake_msg)
             
             # Start listener
             self._listener_task = asyncio.create_task(self._listen())
