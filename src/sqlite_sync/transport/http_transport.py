@@ -75,7 +75,12 @@ class HTTPTransport(TransportAdapter):
         return self._connected
     
     async def exchange_vector_clock(self, local_vc: dict[str, int], schema_version: int = 0) -> dict[str, int]:
-        """Exchange vector clocks to determine sync delta."""
+        """
+        Exchange vector clocks to determine sync delta.
+        
+        Also handles schema migration propagation - stores pending migrations
+        from server for the caller to apply before data sync.
+        """
         try:
             payload = {
                 "device_id": self._device_id.hex(),
@@ -90,10 +95,23 @@ class HTTPTransport(TransportAdapter):
             )
             
             self._remote_vc = data.get("vector_clock", {})
+            self._remote_schema_version = data.get("schema_version", 0)
+            self._remote_schema_hash = data.get("schema_hash", "")
+            self._pending_migrations = data.get("pending_migrations", [])
+            self._migrations_safe = data.get("migrations_safe", True)
+            
             return self._remote_vc
         except Exception as e:
             logger.error(f"Handshake failed: {e}")
             raise
+    
+    def get_pending_migrations(self) -> list[dict]:
+        """Get pending migrations received from server handshake."""
+        return getattr(self, "_pending_migrations", [])
+    
+    def are_migrations_safe(self) -> bool:
+        """Check if pending migrations are safe to apply."""
+        return getattr(self, "_migrations_safe", True)
     
     async def send_operations(self, operations: list[SyncOperation]) -> int:
         """Send operations to remote server."""

@@ -259,6 +259,26 @@ class SyncEngine:
     def check_compatibility(self, remote_version: int) -> bool:
         from sqlite_sync.schema_evolution import SchemaManager
         return SchemaManager(self.connection).check_compatibility(remote_version)
+    
+    def get_schema_info(self) -> dict:
+        """Get current schema info (version + hash) for handshake."""
+        from sqlite_sync.schema_evolution import SchemaManager
+        return SchemaManager(self.connection).get_schema_info()
+    
+    def get_pending_migrations_for(self, client_version: int) -> list[dict]:
+        """Get serialized migrations the client needs."""
+        from sqlite_sync.schema_evolution import SchemaManager
+        return SchemaManager(self.connection).serialize_migrations(client_version)
+    
+    def apply_remote_migrations(self, migrations_data: list[dict]) -> tuple[int, list[str]]:
+        """Apply migrations received from server."""
+        from sqlite_sync.schema_evolution import SchemaManager
+        return SchemaManager(self.connection).apply_remote_migrations(migrations_data)
+    
+    def are_migrations_safe(self, migrations_data: list[dict]) -> bool:
+        """Check if all migrations are safe (additive-only)."""
+        from sqlite_sync.schema_evolution import SchemaManager
+        return SchemaManager(self.connection).all_migrations_safe(migrations_data)
 
     def get_unresolved_conflicts(self) -> list[SyncConflict]:
         return _get_unresolved_conflicts(self.connection)

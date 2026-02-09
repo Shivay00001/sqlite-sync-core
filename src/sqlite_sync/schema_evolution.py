@@ -248,3 +248,166 @@ class SchemaManager:
         """Generate unique migration ID."""
         content = f"{table}:{col}:{version}:{time.time()}"
         return hashlib.sha256(content.encode()).digest()[:16]
+    
+    # =========================================================================
+    # Migration Propagation Support
+    # =========================================================================
+    
+    def serialize_migrations(self, from_version: int) -> list[dict]:
+        """
+        Serialize pending migrations for transfer to remote peers.
+        
+        Args:
+            from_version: Version to start from (exclusive)
+            
+        Returns:
+            List of migration dictionaries suitable for JSON transfer
+        """
+        migrations = self.get_pending_migrations(from_version)
+        serialized = []
+        
+        for m in migrations:
+            # Get the SQL from the database
+            cursor = self._conn.execute(
+                "SELECT sql_up FROM sync_schema_migrations WHERE migration_id = ?",
+                (m.migration_id,)
+            )
+            row = cursor.fetchone()
+            sql_up = row[0] if row else None
+            
+            serialized.append({
+                "migration_id": m.migration_id.hex(),
+                "version_from": m.version_from,
+                "version_to": m.version_to,
+                "migration_type": m.migration_type.value,
+                "table_name": m.table_name,
+                "column_name": m.column_name,
+                "column_definition": m.column_definition,
+                "sql_up": sql_up,
+                "created_at": m.created_at,
+            })
+        
+        return serialized
+    
+    def is_safe_migration(self, migration_data: dict) -> bool:
+        """
+        Check if a migration is safe to apply (additive-only).
+        
+        Safe migrations:
+        - ADD_COLUMN
+        - ADD_TABLE
+        
+        Unsafe migrations:
+        - DROP_TABLE
+        - DROP_COLUMN
+        - RENAME_COLUMN
+        - MODIFY_COLUMN
+        """
+        safe_types = {MigrationType.ADD_COLUMN.value, MigrationType.ADD_TABLE.value}
+        return migration_data.get("migration_type") in safe_types
+    
+    def all_migrations_safe(self, migrations_data: list[dict]) -> bool:
+        """Check if all migrations in a list are safe to apply."""
+        return all(self.is_safe_migration(m) for m in migrations_data)
+    
+    def apply_remote_migrations(self, migrations_data: list[dict]) -> tuple[int, list[str]]:
+        """
+        Apply migrations received from a remote peer.
+        
+        Args:
+            migrations_data: List of serialized migration dicts
+            
+        Returns:
+            Tuple of (applied_count, list of error messages)
+            
+        Raises:
+            SchemaError: If any migration is unsafe
+        """
+        applied = 0
+        errors = []
+        
+        # Sort by version to ensure correct order
+        sorted_migrations = sorted(migrations_data, key=lambda m: m["version_from"])
+        
+        for m_data in sorted_migrations:
+            migration_id = bytes.fromhex(m_data["migration_id"])
+            
+            # Check if already applied (idempotency)
+            cursor = self._conn.execute(
+                "SELECT applied_at FROM sync_schema_migrations WHERE migration_id = ?",
+                (migration_id,)
+            )
+            existing = cursor.fetchone()
+            if existing and existing[0]:
+                # Already applied, skip
+                continue
+            
+            # Safety check
+            if not self.is_safe_migration(m_data):
+                raise SchemaError(
+                    f"Unsafe migration type: {m_data['migration_type']} "
+                    f"for table {m_data['table_name']}"
+                )
+            
+            sql_up = m_data.get("sql_up")
+            if not sql_up:
+                errors.append(f"No SQL for migration {m_data['migration_id']}")
+                continue
+            
+            try:
+                # Execute migration
+                self._conn.execute(sql_up)
+                
+                # Record migration
+                now = int(time.time() * 1_000_000)
+                
+                # Insert or update migration record
+                self._conn.execute(
+                    """
+                    INSERT OR REPLACE INTO sync_schema_migrations 
+                    (migration_id, version_from, version_to, migration_type,
+                     table_name, column_name, column_definition, sql_up, sql_down,
+                     created_at, applied_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        migration_id,
+                        m_data["version_from"],
+                        m_data["version_to"],
+                        m_data["migration_type"],
+                        m_data["table_name"],
+                        m_data.get("column_name"),
+                        m_data.get("column_definition"),
+                        sql_up,
+                        None,  # sql_down not needed for additive
+                        m_data["created_at"],
+                        now
+                    )
+                )
+                
+                # Update version
+                self.record_version(
+                    m_data["version_to"],
+                    f"Applied remote: {m_data['migration_type']} on {m_data['table_name']}"
+                )
+                
+                applied += 1
+                
+            except Exception as e:
+                errors.append(f"Failed to apply migration {m_data['migration_id']}: {e}")
+        
+        self._conn.commit()
+        return applied, errors
+    
+    def get_schema_info(self) -> dict:
+        """
+        Get current schema info for handshake.
+        
+        Returns dict with:
+        - version: Current schema version
+        - hash: Schema hash for quick comparison
+        """
+        return {
+            "version": self.get_current_version(),
+            "hash": self.compute_schema_hash()
+        }
