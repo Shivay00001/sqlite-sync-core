@@ -81,3 +81,14 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+
+# sqlite-sync dev artifacts
+*.bundle
+*.db-shm
+*.db-wal
+test_log*.txt
+test_output.log
+run_output*.txt
+verify_output*.txt
+results.txt
+trace.txt
