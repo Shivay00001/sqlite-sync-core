@@ -180,10 +180,10 @@ class TestNoAutoMerge:
             conn.execute(
                 """
                 INSERT INTO sync_operations (
-                    op_id, device_id, parent_op_id, vector_clock,
+                    op_id, device_id, parent_op_id, vector_clock, hlc,
                     table_name, op_type, row_pk,
                     schema_version, created_at, is_local, applied_at
-                ) VALUES (?, ?, NULL, '{}', 'data', 'INSERT', X'02', 1, 0, 0, NULL)
+                ) VALUES (?, ?, NULL, '{}', '1000000:0000:deadbeef', 'data', 'INSERT', X'02', 1, 0, 0, NULL)
                 """,
                 (remote_op_id, generate_uuid_v7())
             )

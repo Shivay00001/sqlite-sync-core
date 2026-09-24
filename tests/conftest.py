@@ -9,6 +9,23 @@ import pytest
 from sqlite_sync import SyncEngine
 
 
+@pytest.fixture(autouse=True)
+def _no_proxy_env(monkeypatch):
+    """Neutralize ambient proxy env vars.
+
+    httpx.AsyncClient() reads proxy env vars at construction; in sandboxes
+    where the proxy URL is unparseable by the installed httpx (e.g. special
+    characters in the embedded credentials), client construction raises
+    httpx.InvalidURL. The sync tests talk to localhost/mocks and never need
+    an egress proxy, so strip these vars for the whole suite.
+    """
+    for var in (
+        "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.fixture
 def temp_dir():
     """Create a temporary directory for test databases."""

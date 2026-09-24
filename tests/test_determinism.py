@@ -32,6 +32,7 @@ def create_test_operation(
         device_id=device_id,
         parent_op_id=None,
         vector_clock=serialize_vector_clock(vector_clock),
+        hlc=f"1000000:0000:{device_id.hex()}",
         table_name=table_name,
         op_type=op_type,
         row_pk=pack_primary_key(row_pk),

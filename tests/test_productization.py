@@ -298,7 +298,11 @@ class TestDaemonModeScheduler:
         
         # Mock transport
         transport = Mock()
-        transport.connect = Mock(return_value=asyncio.coroutine(lambda: True)())
+
+        async def _connect():
+            return True
+
+        transport.connect = Mock(return_value=_connect())
         
         scheduler = SyncScheduler(engine, transport, interval_seconds=1.0)
         
@@ -352,16 +356,18 @@ class TestCLIStartAlias:
     def test_cli_has_start_command(self):
         """Test that start command exists in CLI."""
         from sqlite_sync.cli.main import app
-        
-        command_names = [cmd.name for cmd in app.registered_commands]
+        from typer.main import get_command
+
+        command_names = list(get_command(app).commands.keys())
         assert "start" in command_names
         assert "serve" in command_names
-    
+
     def test_cli_has_peers_command(self):
         """Test that peers command exists in CLI."""
         from sqlite_sync.cli.main import app
-        
-        command_names = [cmd.name for cmd in app.registered_commands]
+        from typer.main import get_command
+
+        command_names = list(get_command(app).commands.keys())
         assert "peers" in command_names
     
     def test_sync_has_daemon_option(self):

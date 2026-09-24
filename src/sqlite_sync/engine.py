@@ -61,6 +61,11 @@ class ImportResult:
     duplicate_count: int
     is_duplicate_bundle: bool
 
+    @property
+    def skipped(self) -> bool:
+        """Alias for is_duplicate_bundle (kept for API/test compatibility)."""
+        return self.is_duplicate_bundle
+
 class SyncEngine:
     """
     Core engine for SQLite synchronization.
@@ -150,7 +155,12 @@ class SyncEngine:
         if bundle_id is None:
             bundle_id = uuid.uuid4().bytes
         if content_hash is None:
-            content_hash = b"\x00" * 32
+            # Hash the actual batch content so distinct stream batches don't
+            # collide on sync_import_log's UNIQUE(bundle_hash) (and re-sending
+            # the same batch is correctly detected as a duplicate).
+            from sqlite_sync.utils.hashing import sha256_operations
+
+            content_hash = sha256_operations(sorted(op.op_id for op in operations))
             
         def do_apply(conn: sqlite3.Connection) -> ImportResult:
             # Disable triggers for the session

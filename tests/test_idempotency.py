@@ -116,35 +116,40 @@ class TestIdempotentBundleImport:
         assert count == 1
     
     def test_partial_overlap_handled(self):
-        """Mixed new and duplicate operations handled correctly."""
+        """Mixed new and duplicate operations handled correctly.
+
+        NOTE: generate_bundle() is delta-based by design — it only packages
+        operations the peer hasn't seen, so it can never produce an overlapping
+        bundle through the public API. Partial overlap is exercised directly
+        against apply_batch(), which is where duplicate detection lives.
+        """
         # First batch
         self.source.connection.execute(
             "INSERT INTO todos (id, title) VALUES (1, 'First')"
         )
-        
-        bundle1_path = os.path.join(self.tmpdir, "bundle_partial1.db")
-        target_device_id = get_device_id(self.target.connection)
-        generate_bundle(self.source.connection, target_device_id, bundle1_path)
-        
-        # Import first bundle
-        self.target.import_bundle(bundle1_path)
-        
-        # Second batch (includes first operation + new one)
+
+        source_device_id = get_device_id(self.source.connection)
+        ops_batch1 = self.source.get_new_operations()
+        assert len(ops_batch1) == 1
+
+        result1 = self.target.apply_batch(ops_batch1, source_device_id)
+        assert result1.applied_count == 1
+        assert result1.duplicate_count == 0
+
+        # Second batch overlaps: resend op1 (duplicate) + new op2
         self.source.connection.execute(
             "INSERT INTO todos (id, title) VALUES (2, 'Second')"
         )
-        
-        bundle2_path = os.path.join(self.tmpdir, "bundle_partial2.db")
-        generate_bundle(self.source.connection, target_device_id, bundle2_path)
-        
-        # Import second bundle
-        result = self.target.import_bundle(bundle2_path)
-        
+        ops_batch2 = self.source.get_new_operations()
+        assert len(ops_batch2) == 2  # op1 (resent) + op2 (new)
+
+        result = self.target.apply_batch(ops_batch2, source_device_id)
+
         # Should have 1 duplicate and 1 new
-        assert result.duplicate_count >= 1
-        assert result.applied_count >= 1
-        
-        # Both rows should exist
+        assert result.duplicate_count == 1
+        assert result.applied_count == 1
+
+        # Both rows should exist, op1 applied exactly once
         cursor = self.target.connection.execute("SELECT COUNT(*) FROM todos")
         count = cursor.fetchone()[0]
         assert count == 2

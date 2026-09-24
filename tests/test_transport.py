@@ -1,8 +1,9 @@
+import json
 import os
 import pytest
 from fastapi.testclient import TestClient
 from sqlite_sync import SyncEngine
-from sqlite_sync.transport.server import app, get_engine
+from sqlite_sync.transport.server import app, get_engine, security_manager
 from sqlite_sync.transport.http_transport import HTTPTransport
 
 # Mock get_engine dependency
@@ -12,6 +13,24 @@ def override_get_engine():
     return mock_engine
 
 app.dependency_overrides[get_engine] = override_get_engine
+
+
+def signed_post(client, path, payload):
+    """POST with the HMAC request-signing headers the server now requires.
+
+    Signs the exact body bytes with the server's own security_manager, so the
+    test never needs to know the signing secret.
+    """
+    body = json.dumps(payload).encode()
+    bundle = security_manager.sign_bundle(body)
+    headers = {
+        "Content-Type": "application/json",
+        "X-Sync-Device-Id": bundle.device_id.hex(),
+        "X-Sync-Timestamp": str(bundle.timestamp),
+        "X-Sync-Nonce": bundle.nonce.hex(),
+        "X-Sync-Signature": bundle.signature.hex(),
+    }
+    return client.post(path, content=body, headers=headers)
 
 class TestTransport:
     def setup_method(self):
@@ -41,9 +60,10 @@ class TestTransport:
 
     def test_handshake_success(self):
         """Test successful handshake."""
-        response = self.client.post(
+        response = signed_post(
+            self.client,
             "/sync/handshake",
-            json={
+            {
                 "device_id": "client1",
                 "vector_clock": {},
                 "schema_version": 1  # Assuming init sets version 1
@@ -62,10 +82,11 @@ class TestTransport:
         # Default empty DB has version 1 (or 0?).
         # Let's check db schema version.
         ver = mock_engine.get_schema_version()
-        
-        response = self.client.post(
+
+        response = signed_post(
+            self.client,
             "/sync/handshake",
-            json={
+            {
                 "device_id": "client1",
                 "vector_clock": {},
                 "schema_version": ver + 1  # Client is ahead
