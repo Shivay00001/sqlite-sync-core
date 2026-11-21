@@ -1,5 +1,7 @@
 # Sqlite Sync Core
 
+Built by [VisionQuantech](https://visionquantech.com) — AI agents, apps & tools for small businesses.
+
 **A dependency-grade, local-first, offline-first SQLite synchronization primitive. Captures database changes as structured operations, packages them into self-contained bundles, and applies them deterministically across disconnected devices.
 
 ![Language](https://img.shields.io/badge/Language-Python-blue)
